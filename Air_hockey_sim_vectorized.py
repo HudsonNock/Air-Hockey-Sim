@@ -6,6 +6,7 @@ import numpy as np
 import random
 from shapely.geometry import Polygon, LineString
 from itertools import product
+from chandrupatla import chandrupatla
 
 # Initialize pygame
 pygame.init()
@@ -22,18 +23,15 @@ surface = np.array([screen_width / plr, screen_height / plr])
 white = (255, 255, 255)
 black = (0, 0, 0)
 red = (255, 0, 0)
+blue = (0,0,255)
 
 # Set up the display
 screen = pygame.display.set_mode((screen_width, screen_height))
 pygame.display.set_caption("Air Hockey")
 
-game_number = 1000
+game_number = 100
 # Circle parameters
-#game number, player number, mallet_pos (m)
 #play 1 on the left, 2 on the right
-mallet_pos = np.empty((game_number,2,2), dtype="float32")
-mallet_pos[:,0,:] = [100/plr, 250/plr]
-mallet_pos[:,1,:] = [900/plr, 250/plr]
 
 mallet_radius = 0.05
 puck_radius = 0.05
@@ -43,20 +41,35 @@ Vmax = 24
 Vmin = np.zeros((game_number,2,2), dtype="float32")
 pullyR = 0.035306
 
+puck_pos = np.empty((game_number, 2), dtype="float32")
+puck_pos[:,0] = 300/plr
+puck_pos[:,1] = 250/plr
+puck_vel = np.full((game_number, 2), 0.5)
 
-x_0 = np.copy(mallet_pos)
+x_0 = np.empty((game_number,2,2), dtype="float32")
+x_0[:,0,:] = [100/plr, 250/plr]
+x_0[:,1,:] = [900/plr, 250/plr]
 x_p = np.zeros((game_number,2,2), dtype="float32")
 x_pp = np.zeros((game_number,2,2), dtype="float32")
 
 margin = 0.001
 #shape (2, 2, 2), player, x/y, lower/upper
-bounds = np.array([[[mallet_radius+margin, screen_width/(2*plr) - mallet_radius - margin],\
+bounds_mallet = np.array([[[mallet_radius+margin, screen_width/(2*plr) - mallet_radius - margin],\
                    [mallet_radius + margin, screen_height/plr - mallet_radius - margin]],\
                     [[screen_width/(2*plr)+mallet_radius+margin, screen_width/plr - mallet_radius - margin],\
                      [mallet_radius + margin, screen_height/plr - mallet_radius - margin]]])
 # game, player,x/y,lower/upper
-bounds = np.tile(np.expand_dims(bounds, axis=0), (game_number,1,1,1))
+bounds_mallet = np.tile(np.expand_dims(bounds_mallet, axis=0), (game_number,1,1,1))
+
+# x/y, lower/upper
+bounds_puck = np.array([[puck_radius, screen_width/plr - puck_radius], [puck_radius, screen_height/plr - puck_radius]])
+bounds_puck = np.tile(np.expand_dims(bounds_puck, axis=0), (game_number,1,1))
                   
+drag = np.full((game_number), 0.01)
+friction = np.full((game_number), 0.01)
+res = np.full((game_number), 0.9)
+mass = np.full((game_number), 0.1)
+            
 a1 = 3.579*10**(-6)
 a2 = 0.00571
 a3 = (0.0596+0.0467)/2
@@ -113,7 +126,7 @@ C3 = C5 * x_p + C6 * x_0
 C4 = C5 * x_0
 
 #(game, player, x/y)
-x_f = np.copy(mallet_pos)
+x_f = np.copy(x_0)
 #(game, player, x/y)
 a = np.full((game_number, 2, 2), 0.0)
 #a = np.array([[[0.1,0.1], [0.1,0.1]], [[0.08,0.08], [0.08,0.08]]])
@@ -125,11 +138,259 @@ x_over = np.zeros((game_number, 2, 2), dtype="float32")
 
 #(game, player, x/y, min/max)
 mallet_square = np.stack([
-    np.copy(mallet_pos)-(mallet_radius+puck_radius),
-    np.copy(mallet_pos)+mallet_radius+puck_radius
+    np.copy(x_0)-(mallet_radius+puck_radius),
+    np.copy(x_0)+mallet_radius+puck_radius
 ], axis=-1)
 
 overshoot_mask = np.full((game_number, 2, 2), True)
+
+def dP(t, B, f, mass, C, D):
+    return (mass/B) * np.log(np.cos((np.sqrt(B*f)*(C*mass+t))/mass)) + D
+
+def velocity(t, B, f, mass, C):
+    tpZero = get_tPZero(mass, C)
+    v = np.zeros_like(t)
+    v_mask = t < tpZero
+    v[v_mask] = -np.sqrt(f[v_mask]/B[v_mask]) * np.tan((np.sqrt(B[v_mask]*f[v_mask])*(C[v_mask]*mass[v_mask]+t[v_mask]))/mass[v_mask])
+    return v
+
+def get_tPZero(mass, C):
+    return -C*mass
+
+def getC(v_norm, B, f):
+    return - np.arctan(v_norm * np.sqrt(B/f)) / np.sqrt(B*f)
+
+def getD(B, mass, f, C):
+    return - (mass/B) * np.log(np.cos(np.sqrt(B*f)*C))
+
+def distance_to_wall(t, dist, B, f, mass, C, D):
+    return dP(t, B, f, mass, C, D) - dist
+
+def update_puck(t, mask):
+    vel = puck_vel[mask]
+    pos = puck_pos[mask]
+    #w = np.column_stack((p_vel[:,1], -p_vel[:,0]))
+    v_norm = np.sqrt(np.sum(vel**2, axis=1))
+    v_norm_mask = (v_norm != 0)
+    #w = puck_radius * W[v_norm_mask] / v_norm[v_norm_mask]
+    new_pos = np.empty_like(pos)
+    new_vel = np.empty_like(vel)
+
+    new_vel[~v_norm_mask] = 0
+    new_pos[~v_norm_mask] = pos[~v_norm_mask]
+
+    if not np.any(v_norm_mask):
+        recurr_mask = np.full((game_number), False)
+        recurr_time = np.empty((game_number))
+        return new_pos, new_vel, recurr_mask, recurr_time
+    
+    vel = vel[v_norm_mask]
+    v_norm = v_norm[v_norm_mask]
+    pos = pos[v_norm_mask]
+
+    recurr_mask_global = np.full((game_number), False)
+    recurr_time_global = np.empty((game_number))
+
+    recurr_mask = recurr_mask_global[mask]
+    recurr_time = recurr_time_global[mask]
+
+    dir = vel / np.tile(v_norm[:, np.newaxis], (1, 2))
+
+    #Compute constants for movement
+    Bm = drag[mask][v_norm_mask]
+    fm = friction[mask][v_norm_mask]
+    massm = mass[mask][v_norm_mask]
+    resm = res[mask][v_norm_mask]
+    t = t[mask][v_norm_mask]
+ 
+    C = getC(v_norm, Bm, fm)
+    D = getD(Bm, massm, fm, C)
+    dPdt = dP(t, Bm, fm, massm, C, D)
+
+    """
+    #check if it lies outside the playing area (i.e. somewhat in the goal) and will collide with a corner
+    bounces = False
+    A = [0,0]
+    A[0], bounces, s2 = check_in_goal(vel, pos, w)
+    dPt = dP(t)
+    vt = velocity(t)
+    
+    if bounces:
+        if surface[1]/2 - goal_width/2 > vel[1]*s2+pos[1]+w[1]:
+            A[1] = surface[1]/2 - goal_width/2
+        elif vel[1]*s2+pos[1]+w[1] >  surface[1]/2 + goal_width/2:
+            A[1] = surface[1]/2 + goal_width/2
+
+        return corner_collision(A, pos, vel, t, final_pos, C, D, tPZero, v_norm, dPZero, dir, dPt, vt, t_init)
+    
+    #Check if its going into the goal without hitting a corner
+    s1 = 0
+    s2 = 0
+    y1 = 0
+    y2 = 0
+    if abs(vel[0]) != 0:
+        if vel[0] < 0:
+            s1 = (-pos[0] - w[0]) / vel[0]
+            s2 = (-pos[0] + w[0]) / vel[0]
+        elif vel[0] > 0:
+            s1 = (-pos[0] - w[0] + surface[0]) / vel[0]
+            s2 = (-pos[0] + w[0] + surface[0]) / vel[0]
+        y1 = pos[1] + w[1] + s1*vel[1]
+        y2 = pos[1] - w[1] + s2*vel[1]
+
+        #both side rays enter goal
+        if surface[1]/2 - goal_width/2 < y1 < surface[1]/2 + goal_width/2 and surface[1]/2 - goal_width/2 < y2 < surface[1]/2 + goal_width/2:
+            for j in range(2):
+                if t > tPZero:
+                    new_pos[j] = final_pos[j]
+                else:
+                    new_pos[j] = pos[j] + dPt * dir[j]
+                    new_vel[j] = vt * dir[j]
+
+            arr = puck_mallet_collision(pos, vel, velocity(t), t, t_init)
+            #x_p, x_m, v_p, v_m, dt_sum
+            if len(arr) > 1:
+                new_pos = arr[0]
+                new_vel = arr[2]
+                return update_puck(t-arr[4], new_pos, new_vel, t_init+arr[4])
+
+            return new_pos, new_vel
+    """
+        
+
+    #Compute which wall it will hit if it keeps moving
+    vel_x_0 = (vel[:,0] == 0)
+    vel_y_0 = (vel[:,1] == 0)
+
+    #(game, x/y)
+    vel[:,0] = np.where(vel_x_0, 1, vel[:,0])
+    vel[:,1] = np.where(vel_y_0, 1, vel[:,1])
+
+    #distance, bounds_puck: (game, x/y, lower/upper)
+    #pos, vel: (game, x/y)
+    #v_norm: (game,)
+    distances = (bounds_puck[mask] - pos[:,:,None]) / vel[:,:,None] * v_norm[:,None,None]
+    distances[:,0,:] = np.where(vel_x_0[:,None], -1, distances[:,0,:])
+    distances[:,1,:] = np.where(vel_y_0[:,None], -1, distances[:,1,:])
+
+    s_xy = np.maximum(distances[:,:,0], distances[:,:,1])
+    s_xy = np.where(s_xy < 0, np.inf, s_xy)
+
+    #game,
+    s = np.min(s_xy, axis=1)
+
+    hit_wall_mask = (s < dPdt)
+
+    new_pos2 = np.empty_like(pos)
+    new_vel2 = np.empty_like(vel)
+    #t, dist, B, f, mass, C, D
+    if np.any(hit_wall_mask):
+        wall_dist = s[hit_wall_mask]
+        wall = np.argmin(s_xy[hit_wall_mask], axis=1)
+        Bmw = Bm[hit_wall_mask]
+        fmw = fm[hit_wall_mask]
+        massmw = massm[hit_wall_mask]
+        Cw = C[hit_wall_mask]
+        Dw = D[hit_wall_mask]
+        tw = t[hit_wall_mask]
+        dirw = dir[hit_wall_mask]
+        resw = resm[hit_wall_mask]
+        root = chandrupatla(distance_to_wall, np.zeros_like(tw), tw, args=(wall_dist, \
+                                Bmw, fmw, massmw, Cw, Dw))
+
+        #B, f, mass, C, D
+        new_pos2[hit_wall_mask] = pos[hit_wall_mask] + dirw * np.tile(dP(root, Bmw, fmw,\
+                                                    massmw, Cw, Dw)[:, np.newaxis], (1, 2))
+        
+        new_vel2_bc = np.tile(velocity(root, Bmw, fmw, massmw, Cw)[:, np.newaxis], (1, 2)) * dirw
+        new_vel2_bc[:,0] = np.where(wall == 0, -resw * new_vel2_bc[:,0], new_vel2_bc[:,0])
+        new_vel2_bc[:,1] = np.where(wall == 0, new_vel2_bc[:,1], - resw * new_vel2_bc[:,1])
+        new_vel2[hit_wall_mask] = new_vel2_bc 
+
+        recurr_mask_w = np.full_like(recurr_mask[v_norm_mask], False)
+        recurr_time_w = np.empty_like(recurr_time[v_norm_mask])
+        recurr_mask_w[hit_wall_mask] = True
+        recurr_time_w[hit_wall_mask] = tw-root
+        recurr_mask[v_norm_mask] = recurr_mask_w
+        recurr_time[v_norm_mask] = recurr_time_w
+
+    if np.any(~hit_wall_mask):
+        Bmw = Bm[~hit_wall_mask]
+        fmw = fm[~hit_wall_mask]
+        massmw = massm[~hit_wall_mask]
+        Cw = C[~hit_wall_mask]
+        Dw = D[~hit_wall_mask]
+        tw = t[~hit_wall_mask]
+        new_pos2[~hit_wall_mask] = pos[~hit_wall_mask] + dir[~hit_wall_mask] * np.tile(dP(tw, Bmw, fmw, massmw, Cw, Dw)[:, np.newaxis], (1, 2))
+        new_vel2[~hit_wall_mask] = np.tile(velocity(tw, Bmw, fmw, massmw, Cw)[:, np.newaxis], (1, 2)) * dir[~hit_wall_mask]
+
+    new_pos[v_norm_mask] = new_pos2
+    new_vel[v_norm_mask] = new_vel2
+
+    recurr_mask_global[mask] = recurr_mask
+    recurr_time_global[mask] = recurr_time
+
+    return new_pos, new_vel, recurr_mask_global, recurr_time_global
+    #thit_min = -1
+    #if thit > 0:
+    #    thit_min = thit
+
+    """
+
+
+    #If it doesn't hit the wall in time, use the normal equations
+    if thit_min == -1 or t < thit_min:
+        arr = puck_mallet_collision(pos, vel, velocity(t), t, t_init)
+        #x_p, x_m, v_p, v_m, dt_sum
+        if len(arr) > 1:
+            new_pos = arr[0]
+            new_vel = arr[2]
+            count_err += 1
+            return update_puck(t-arr[4], new_pos, new_vel, t_init+arr[4])
+        
+        for j in range(2):
+            if t > tPZero:
+                new_pos[j] = final_pos[j]
+            else:
+                new_pos[j] = pos[j] + dPt * dir[j]
+                new_vel[j] = vt * dir[j]
+
+        return new_pos, new_vel
+    
+
+    #Check if it will hit the corner or not
+    if wall_idx == 0 and  surface[1]/2 - goal_width/2 < vel[1] * s1 + pos[1] < surface[1]/2 + goal_width/2:
+        A = [0,surface[1]/2 - goal_width/2]
+        if vel[0] > 0:
+            A[0] = surface[0]
+        if (y1+y2)/2 > surface[1]/2:
+            A[1] = surface[1]/2 + goal_width/2
+
+        return corner_collision(A, pos, vel, t, final_pos, C, D, tPZero, v_norm, dPZero, dir, dPt, vt, t_init)
+
+    #determine if mallet will hit before wall collision
+    arr = puck_mallet_collision(pos, vel, velocity(t), thit_min, t_init)
+    #x_p, x_m, v_p, v_m, dt_sum
+    if len(arr) > 1:
+        new_pos = arr[0]
+        new_vel = arr[2]
+        return update_puck(t-arr[4], new_pos, new_vel, t_init+arr[4])
+    
+    #Go to where it would hit the wall, set position and vel opposit of what they would be
+    dPt_hit = dP(thit_min)
+    vt_hit = velocity(thit_min)
+    for j in range(2):
+        if j == wall_idx:
+            new_pos[j] = pos[j] + dPt_hit * dir[j]
+            new_vel[j] = -res * vt_hit * dir[j]
+        else:
+            new_pos[j] = pos[j] + dPt_hit * dir[j]
+            new_vel[j] = res * vt_hit * dir[j]
+
+
+    return update_puck(t-thit_min, new_pos, new_vel, t_init+thit_min)
+    """
+
 
 #A e^(at) + B e^(bt) + Ct + D
 def f(x, exponentials):
@@ -255,9 +516,9 @@ def get_xpp(t):
 # c = C2[i,j,k]*A2CE[i,j,k,1]+C3[i,j,k]*A3CE[i,j,k,1]+C4[i,j,k]*A4CE[i,j,k,1]
 def solve_Cp1(x,i,j,k,c):
     if x <= 0:
-        return C2[i,j,k]/C7[i,j,k] - bounds[i,j,k,1]
+        return C2[i,j,k]/C7[i,j,k] - bounds_mallet[i,j,k,1]
     return C2[i,j,k]/C7[i,j,k] - (x/(ab[i,j,k,1]*C7[i,j,k])*\
-                np.log((x*CE[i,j,k,3])/(-x*CE[i,j,k,1]+c))) - bounds[i,j,k,1]
+                np.log((x*CE[i,j,k,3])/(-x*CE[i,j,k,1]+c))) - bounds_mallet[i,j,k,1]
 
 def solve_Cp1_prime(x,i,j,k,c):
     if x <= 0:
@@ -275,9 +536,9 @@ def solve_Cp1_prime2(x,i,j,k,c):
 # c = C2[i,j,k]*A2CE[i,j,k,1]+C3[i,j,k]*A3CE[i,j,k,1]+C4[i,j,k]*A4CE[i,j,k,1]
 def solve_Cn1(x,i,j,k,c):
     if x >= 0:
-        return C2[i,j,k]/C7[i,j,k] - bounds[i,j,k,0]
+        return C2[i,j,k]/C7[i,j,k] - bounds_mallet[i,j,k,0]
     return C2[i,j,k]/C7[i,j,k] - (x/(ab[i,j,k,1]*C7[i,j,k])*\
-                np.log((x*CE[i,j,k,3])/(-x*CE[i,j,k,1]+c))) - bounds[i,j,k,0]
+                np.log((x*CE[i,j,k,3])/(-x*CE[i,j,k,1]+c))) - bounds_mallet[i,j,k,0]
 
 def solve_Cn1_prime(x,i,j,k,c):
     if x >= 0:
@@ -340,29 +601,33 @@ def solve_a():
     x_min = np.maximum(x_f * C7/C1 - C2/C1, 0)
     converged = False
     x0 = x_min + 0.01
-    for n in range(2,11):
-        for _ in range(100):
-            err = a_error(x0)    
+    #for n in range(2,11):
+    for _ in range(100):
+        err = a_error(x0)    
 
-            if np.all(np.abs(err) < 1e-4):
-                converged = True
-                break     
-                
-            err_prime = a_error_prime(x0) 
+        if np.all(np.abs(err) < 1e-4):
+            converged = True
+            break     
             
-            # Update step: x_new = x - f(x) / f'(x)
-            err_prime_mask = (err_prime == 0)
-            err_prime = np.where(err_prime_mask, 1, err_prime)
-            delta_x = err / err_prime
-            x_old = np.copy(x0)
-            x0 = np.where(err_prime_mask, x0-0.001, x0 - delta_x)
+        err_prime = a_error_prime(x0) 
+        
+        # Update step: x_new = x - f(x) / f'(x)
+        err_prime_mask = (err_prime == 0)
+        err_prime = np.where(err_prime_mask, 1, err_prime)
+        delta_x = err / err_prime
+        x_old = np.copy(x0)
+        x0[err_prime_mask] -= 0.0001
+        x0[~err_prime_mask] -= delta_x[~err_prime_mask]
+        #x0 = np.where(err_prime_mask, x0-0.001, x0 - delta_x)
 
-            neg_mask = x0 < x_min
-            x0 = np.where(neg_mask, x_min + (x_old-x_min) / 2, x0)
-        if converged:
-            break
-        converged_mask = np.abs(err) < 1e-4
-        x0 = np.where(converged_mask, x0, n * np.maximum(0.5, x_min))
+        neg_mask = x0 < x_min
+        x0[neg_mask] = x_min[neg_mask] / 2 + x_old[neg_mask] / 2
+        x0[~neg_mask] = x0[~neg_mask]
+        #x0 = np.where(neg_mask, x_min + (x_old-x_min) / 2, x0)
+        #if converged:
+        #    break
+        #converged_mask = np.abs(err) < 1e-4
+        #x0 = np.where(converged_mask, x0, n * np.maximum(0.5, x_min))
     if not converged:
         indices = np.argwhere(np.abs(err) > 1e-4)
         for i,j,k in indices:
@@ -402,16 +667,16 @@ def update_path(time):
     global a
     global a2
     global overshoot_mask
-    #bounds: shape (game, 2, 2, 2), game, player, x/y, lower/upper
+    #bounds_mallet: shape (game, 2, 2, 2), game, player, x/y, lower/upper
     #(game, player, x/y)
 
     random_base = np.random.uniform(0,1, (game_number,2,2))
-    x_f = bounds[:,:,:,0] + random_base * (bounds[:,:,:,1] - bounds[:,:,:,0])
+    x_f = bounds_mallet[:,:,:,0] + random_base * (bounds_mallet[:,:,:,1] - bounds_mallet[:,:,:,0])
 
     #(game, player, x/y)
     x_0 = get_pos(time)
-    x_0 = np.maximum(x_0, bounds[:,:,:,0]+1e-8)
-    x_0 = np.minimum(x_0, bounds[:,:,:,1]-1e-8)
+    x_0 = np.maximum(x_0, bounds_mallet[:,:,:,0]+1e-8)
+    x_0 = np.minimum(x_0, bounds_mallet[:,:,:,1]-1e-8)
     x_p = get_xp(time)
     x_pp = get_xpp(time)
 
@@ -434,13 +699,17 @@ def update_path(time):
                                    np.logical_xor(x_0 > x_f0, x_0 > x_f))
 
     C1 = np.where(overshoot_mask & (x_f0 < x_0), -C1, C1)
-    log_arg = np.where(overshoot_mask, (C1*CE[:,:,:,3])/(-C1*CE[:,:,:,1]+C2*A2CE[:,:,:,1]+C3*A3CE[:,:,:,1]+C4*A4CE[:,:,:,1]), 1)
-    x_over = np.where(overshoot_mask,\
-                        C2/C7 - (C1/(ab[:,:,:,1]*C7) * np.log(log_arg)),\
-                        x_0)
+    x_over = np.empty_like(x_over)
+    log_arg = (C1[overshoot_mask]*CE[:,:,:,3][overshoot_mask])/(-C1[overshoot_mask]*CE[:,:,:,1][overshoot_mask]+C2[overshoot_mask]*A2CE[:,:,:,1][overshoot_mask]+C3[overshoot_mask]*A3CE[:,:,:,1][overshoot_mask]+C4[overshoot_mask]*A4CE[:,:,:,1][overshoot_mask])
+    x_over[overshoot_mask] = C2[overshoot_mask]/C7[overshoot_mask] - C1[overshoot_mask]/(ab[:,:,:,1][overshoot_mask]*C7[overshoot_mask]) * np.log(log_arg)
+    x_over[~overshoot_mask] = x_0[~overshoot_mask]
+    #log_arg = np.where(overshoot_mask, (C1*CE[:,:,:,3])/(-C1*CE[:,:,:,1]+C2*A2CE[:,:,:,1]+C3*A3CE[:,:,:,1]+C4*A4CE[:,:,:,1]), 1)
+    #x_over = np.where(overshoot_mask,\
+    #                    C2/C7 - (C1/(ab[:,:,:,1]*C7) * np.log(log_arg)),\
+    #                    x_0)
 
-    outofbounds_mask_p = (x_over > bounds[:,:,:,1])
-    outofbounds_mask_n = (x_over < bounds[:,:,:,0])
+    outofbounds_mask_p = (x_over > bounds_mallet[:,:,:,1])
+    outofbounds_mask_n = (x_over < bounds_mallet[:,:,:,0])
 
     indices = np.argwhere(outofbounds_mask_p)
 
@@ -464,7 +733,7 @@ def update_path(time):
                     print(x_p[i,j,k])
                     print(x_pp[i,j,k])
                     print(x_over[i,j,k])
-                    print(bounds[i,j,k,1])
+                    print(bounds_mallet[i,j,k,1])
 
             root = np.minimum(abs(root), Vmax * pullyR-0.0001)
 
@@ -479,7 +748,7 @@ def update_path(time):
                     x_over[i,j,1-k] = C2[i,j,1-k]/C7[i,j,1-k] - (C1[i,j,1-k]/(ab[i,j,1-k,1]*C7[i,j,1-k]) * np.log(\
                         (C1[i,j,1-k]*CE[i,j,1-k,3])/(-C1[i,j,1-k]*CE[i,j,1-k,1]+C2[i,j,1-k]*A2CE[i,j,1-k,1]+C3[i,j,1-k]*A3CE[i,j,1-k,1]+C4[i,j,1-k]*A4CE[i,j,1-k,1])))
 
-            x_over[i,j,k] = bounds[i,j,k,1]
+            x_over[i,j,k] = bounds_mallet[i,j,k,1]
 
     indices = np.argwhere(outofbounds_mask_n)
 
@@ -504,7 +773,7 @@ def update_path(time):
                     print(x_p[i,j,k])
                     print(x_pp[i,j,k])
                     print(x_over[i,j,k])
-                    print(bounds[i,j,k,0])
+                    print(bounds_mallet[i,j,k,0])
 
             root = np.minimum(abs(root), Vmax * pullyR-0.0001)
 
@@ -518,7 +787,7 @@ def update_path(time):
                     x_over[i,j,1-k] = C2[i,j,1-k]/C7[i,j,1-k] - (C1[i,j,1-k]/(ab[i,j,1-k,1]*C7[i,j,1-k]) * np.log(\
                         (C1[i,j,1-k]*CE[i,j,1-k,3])/(-C1[i,j,1-k]*CE[i,j,1-k,1]+C2[i,j,1-k]*A2CE[i,j,1-k,1]+C3[i,j,1-k]*A3CE[i,j,1-k,1]+C4[i,j,1-k]*A4CE[i,j,1-k,1])))
                     
-            x_over[i,j,k] = bounds[i,j,k,0]
+            x_over[i,j,k] = bounds_mallet[i,j,k,0]
 
     C1 = np.abs(C1)
     
@@ -542,24 +811,60 @@ count = 0
 action = 0
 clock = pygame.time.Clock()
 timer = clock.tick(60) / 1000.0
+index = 0
+#puck_vel = np.array([[0,4], [0,-2]], dtype="float32")
 while True:
     #(game, player, x/y)
-    pos = get_pos(time)
-    if time >= Ts:
-        update_path(time)
-        time = 0
+    recurr_mask = np.full((game_number), True)
+    recurr_time = np.full((game_number), Ts/N)
+    while np.any(recurr_mask):
+        puck_pos[recurr_mask], puck_vel[recurr_mask], recurr_mask, recurr_time = update_puck(recurr_time, recurr_mask)
 
-    """
-    position1 = [pos[0][0][0] * plr, pos[0][0][1] * plr]
-    position2 = [pos[0][1][0] * plr, pos[0][1][1] * plr]
+    not_moving_mask = (puck_vel[:,0] == 0) & (puck_vel[:,1] == 0)  # Shape (n,)
 
-    screen.fill(white)
-    pygame.draw.rect(screen, red, pygame.Rect(screen_width/2 - 5, 0, 10, screen_height))
-    pygame.draw.circle(screen, black, (int(round(position1[0])), int(round(position1[1]))), mallet_radius*plr)
-    pygame.draw.circle(screen, black, (int(round(position2[0])), int(round(position2[1]))), mallet_radius*plr)
-    pygame.draw.circle(screen, red, (int(x_f[0,0,0]*plr), int(x_f[0,0,1]*plr)), 5)
-    pygame.display.flip()
-    """
+    if np.any(not_moving_mask):
+        puck_vel[not_moving_mask] = np.random.uniform(-100, 100, size=(not_moving_mask.sum(), 2))
+
+    out_of_bounds = np.logical_or((puck_pos < bounds_puck[:,:,0]), (puck_pos > bounds_puck[:,:,1]))
+    if np.any(out_of_bounds):
+        print("OUT OF BOUNDS")
+        screen.fill(white)
+        for i in range(99):
+            if puck_pos[i,0] < bounds_puck[i,0,0] or puck_pos[i,0] > bounds_puck[i,0,1] or\
+               puck_pos[i,1] < bounds_puck[i,1,0] or puck_pos[i,1] > bounds_puck[i,1,1]:
+                pygame.draw.circle(screen, blue, (int(round(puck_pos[i,0]*plr)), int(round(puck_pos[i,1]*plr))), puck_radius*plr)
+                pygame.display.flip()
+                print(puck_pos[i,0])
+                print(puck_pos[i,1])
+                N = 1000
+                index = i
+                break
+
+    puck_pos = np.maximum(puck_pos, bounds_puck[:,:,0]+1e-8)
+    puck_pos = np.minimum(puck_pos, bounds_puck[:,:,1]-1e-8)
+
+
+    #pos = get_pos(time)
+    #if time >= Ts:
+    #    update_path(time)
+    #    time = 0
+
+    #position1 = [pos[0][0][0] * plr, pos[0][0][1] * plr]
+    #position2 = [pos[0][1][0] * plr, pos[0][1][1] * plr]
+
+    if N > 1:
+        screen.fill(white)
+
+        #pygame.draw.rect(screen, red, pygame.Rect(screen_width/2 - 5, 0, 10, screen_height))
+        #pygame.draw.rect(screen, red, pygame.Rect((int(mallet_square[0,0,0,0]*plr), int(mallet_square[0,0,1,0]*plr)), (int(mallet_square[0,0,0,1]*plr - mallet_square[0,0,0,0]*plr), int(mallet_square[0,0,1,1]*plr - mallet_square[0,0,1,0]*plr))), width=5)
+        #pygame.draw.rect(screen, red, pygame.Rect((int(mallet_square[0,1,0,0]*plr), int(mallet_square[0,1,1,0]*plr)), (int(mallet_square[0,1,0,1]*plr - mallet_square[0,1,0,0]*plr), int(mallet_square[0,1,1,1]*plr - mallet_square[0,1,1,0]*plr))), width=5)
+        #pygame.draw.circle(screen, black, (int(round(position1[0])), int(round(position1[1]))), mallet_radius*plr)
+        #pygame.draw.circle(screen, black, (int(round(position2[0])), int(round(position2[1]))), mallet_radius*plr)
+        #pygame.draw.circle(screen, red, (int(x_f[0,0,0]*plr), int(x_f[0,0,1]*plr)), 5)
+        #pygame.draw.circle(screen, red, (int(x_f[0,1,0]*plr), int(x_f[0,1,1]*plr)), 5)
+
+        pygame.draw.circle(screen, blue, (int(round(puck_pos[i,0]*plr)), int(round(puck_pos[i,1]*plr))), puck_radius*plr)
+        pygame.display.flip()
 
     action += 1
     if action % int(0.1*3600/Ts) == 0:
@@ -571,3 +876,7 @@ while True:
 #100 games: 15 sec / 0.1 hour, 2400 speedup
 #500 games: 42.07 sec / 0.1 hour, 4279 speedup
 #1000 games: 84 sec / 0.1 hour, 4286 speedup 
+
+#with puck (only wall collision)
+#100 games: 28.731 sec / 0.1 hour, 1253 speedup,  
+#1000 games: 113 / 0.1 hour, 3185 speedup

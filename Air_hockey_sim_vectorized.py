@@ -29,12 +29,14 @@ blue = (0,0,255)
 screen = pygame.display.set_mode((screen_width, screen_height))
 pygame.display.set_caption("Air Hockey")
 
-game_number = 100
+game_number = 1000
 # Circle parameters
 #play 1 on the left, 2 on the right
 
 mallet_radius = 0.05
 puck_radius = 0.05
+
+goal_width = 0.45
 
 Vmax = 24
 #(game, player, x/y)
@@ -42,9 +44,11 @@ Vmin = np.zeros((game_number,2,2), dtype="float32")
 pullyR = 0.035306
 
 puck_pos = np.empty((game_number, 2), dtype="float32")
-puck_pos[:,0] = 300/plr
-puck_pos[:,1] = 250/plr
-puck_vel = np.full((game_number, 2), 0.5)
+puck_pos[:,0] = 1.975222 - 1.359155 * 0.3
+puck_pos[:,1] = 0.7260047 - 0.98599756 * 0.3
+puck_vel = np.full((game_number, 2), -1, dtype="float32")
+puck_vel[:,0] = 1.359155
+puck_vel[:,1] = 0.98599756
 
 x_0 = np.empty((game_number,2,2), dtype="float32")
 x_0[:,0,:] = [100/plr, 250/plr]
@@ -145,14 +149,23 @@ mallet_square = np.stack([
 overshoot_mask = np.full((game_number, 2, 2), True)
 
 def dP(t, B, f, mass, C, D):
-    return (mass/B) * np.log(np.cos((np.sqrt(B*f)*(C*mass+t))/mass)) + D
+    tpZero = get_tPZero(mass,C)
+    t = np.minimum(tpZero, t)
+    p = (mass/B) * np.log(np.cos((np.sqrt(B*f)*(C*mass+t))/mass)) + D
+    return p
 
 def velocity(t, B, f, mass, C):
-    tpZero = get_tPZero(mass, C)
+    tpZero = get_tPZero(mass,C)
     v = np.zeros_like(t)
     v_mask = t < tpZero
-    v[v_mask] = -np.sqrt(f[v_mask]/B[v_mask]) * np.tan((np.sqrt(B[v_mask]*f[v_mask])*(C[v_mask]*mass[v_mask]+t[v_mask]))/mass[v_mask])
+    v[v_mask] = -np.sqrt(f/B)[v_mask] * np.tan(((np.sqrt(B*f)*(C*mass+t))/mass)[v_mask])
     return v
+
+def velocity_scalar(t, B, f, mass, C):
+    tpZero = -C*mass
+    if t < tpZero:
+        return -np.sqrt(f/B) * np.tan(((np.sqrt(B*f)*(C*mass+t))/mass))
+    return 0
 
 def get_tPZero(mass, C):
     return -C*mass
@@ -166,97 +179,191 @@ def getD(B, mass, f, C):
 def distance_to_wall(t, dist, B, f, mass, C, D):
     return dP(t, B, f, mass, C, D) - dist
 
+
+def corner_collision(A, pos, vel, t, C, D, v_norm, dir, dPdt,B,f,mass, vt, res):
+    a = vel[0]**2 + vel[1]**2
+    b = 2*pos[0]*vel[0] + 2*pos[1]*vel[1]-2*A[0]*vel[0]-2*A[1]*vel[1]
+    c = pos[0]**2+pos[1]**2+A[0]**2+A[1]**2-puck_radius**2-2*A[0]*pos[0]-2*A[1]*pos[1]
+
+    s = (-b - np.sqrt(b**2 - 4*a*c)) / (2*a)
+
+    new_pos = [0,0]
+    new_pos[0] = pos[0] + s * vel[0]
+    new_pos[1] = pos[1] + s * vel[1]
+    wall_val = s * v_norm
+
+    thit_min = -1
+    if dPdt > wall_val:
+        thit_min, converged = brentq(distance_to_wall, 0, t, args=(wall_val,B,f,mass,C,D),\
+                                        xtol=1e-5, maxiter=30, full_output=True, disp=False)
+        if not converged.converged:
+            print("Failed to converge corner collision")
+            print(pos)
+            print(vel)
+            print(wall_val)
+            print(wall_val/v_norm)
+            print(v_norm)
+            print(C)
+            print(D)
+            #print((new_pos[0] - pos[0])*tPZero[0]/(final_pos[0]-pos[0]))
+
+    new_vel = [0,0]
+    if thit_min == -1:
+        for j in range(2):
+                new_pos[j] = pos[j] + dPdt * dir[j]
+                new_vel[j] = vt * dir[j]
+        return new_pos, new_vel, False, 0
+
+    vt_hit = velocity_scalar(thit_min, B, f, mass, C)
+    for j in range(2):
+        new_vel[j] = vt_hit * dir[j]
+
+    n = np.array([new_pos[0] - A[0], new_pos[1] - A[1]])
+    n = n / np.sqrt(np.dot(n, n))
+    tangent = np.array([n[1], -n[0]])
+    vel_r = np.array(new_vel)
+
+    vel_r = np.array([-res*np.dot(vel_r, n), res*np.dot(vel_r, tangent)])
+    new_vel = n * vel_r[0] + tangent * vel_r[1]
+
+    return new_pos, new_vel, True, t - thit_min
+
+def check_in_goal(vel, pos, v_norm):
+    A = [0,0]
+    bounces = False
+    w1 = [vel[1] * puck_radius, -vel[0] * puck_radius] / v_norm
+    w2 = -w1
+    s1 = np.inf
+    s2 = np.inf
+
+    if pos[0] < puck_radius:
+        if vel[0] > 0:
+            if pos[0] + w1[0] < 0:
+                s1 = (-pos[0] - w1[0]) / vel[0]
+                if surface[1]/2 - goal_width/2 > vel[1]*s1+pos[1]+w1[1] or vel[1]*s1+pos[1]+w1[1] >  surface[1]/2 + goal_width/2:
+                    bounces = True
+                else:
+                    s1 = np.inf
+            if pos[0] + w2[0] < 0:
+                s2 = (-pos[0] - w2[0]) / vel[0]
+                if surface[1]/2 - goal_width/2 > vel[1]*s2+pos[1]+w2[1] or vel[1]*s2+pos[1]+w2[1] >  surface[1]/2 + goal_width/2:
+                    bounces = True
+                else:
+                    s2 = np.inf
+        elif vel[0] < 0:
+            if pos[0] + w1[0] > 0:
+                s1 = (-pos[0]-w1[0]) / vel[0]
+                if surface[1]/2 - goal_width/2 > vel[1]*s1+pos[1]+w1[1] or vel[1]*s1+pos[1]+w1[1] >  surface[1]/2 + goal_width/2:
+                    bounces = True
+                else:
+                    s1 = np.inf
+            if pos[0] + w2[0] > 0:
+                s2 = (-pos[0]-w2[0]) / vel[0]
+                if surface[1]/2 - goal_width/2 > vel[1]*s2+pos[1]+w2[1] or vel[1]*s2+pos[1]+w2[1] >  surface[1]/2 + goal_width/2:
+                    bounces = True
+                else:
+                    s2 = np.inf
+        elif vel[0] == 0:
+                bounces = True
+        if bounces:
+            A[0] = 0
+    elif pos[0] > surface[0]-puck_radius:
+        if vel[0] > 0:
+            if pos[0] + w1[0] < surface[0]:
+                s1 = (-pos[0] - w1[0] + surface[0]) / vel[0]
+                if surface[1]/2 - goal_width/2 > vel[1]*s1+pos[1]+w1[1] or vel[1]*s1+pos[1]+w1[1] >  surface[1]/2 + goal_width/2:
+                    bounces = True
+                else:
+                    s1 = np.inf
+            if pos[0] + w2[0] < surface[0]:
+                s2 = (-pos[0] - w2[0] + surface[0]) / vel[0]
+                if surface[1]/2 - goal_width/2 > vel[1]*s2+pos[1]+w2[1] or vel[1]*s2+pos[1]+w2[1] >  surface[1]/2 + goal_width/2:
+                    bounces = True
+                else:
+                    s2 = np.inf
+        elif vel[0] < 0:
+            if pos[0] + w1[0] > surface[0]:
+                s1 = (-pos[0]-w1[0]+surface[0]) / vel[0]
+                if surface[1]/2 - goal_width/2 > vel[1]*s1+pos[1]+w1[1] or vel[1]*s1+pos[1]+w1[1] >  surface[1]/2 + goal_width/2:
+                    bounces = True
+                else:
+                    s1 = np.inf
+            if pos[0] + w2[0] > surface[0]:
+                s2 = (-pos[0]-w2[0]+surface[0]) / vel[0]
+                if surface[1]/2 - goal_width/2 > vel[1]*s2+pos[1]+w2[1] or vel[1]*s2+pos[1]+w2[1] >  surface[1]/2 + goal_width/2:
+                    bounces = True
+                else:
+                    s2 = np.inf
+        elif vel[0] == 0:
+                bounces = True
+        if bounces:
+            A[0] = surface[0] 
+
+    if bounces:
+        if vel[0] != 0:
+            if s1 < s2:
+                if surface[1]/2 - goal_width/2 > vel[1]*s1+pos[1]+w1[1]:
+                    A[1] = surface[1]/2 - goal_width/2
+                elif vel[1]*s1+pos[1]+w1[1] >  surface[1]/2 + goal_width/2:
+                    A[1] = surface[1]/2 + goal_width/2
+            else:
+                if surface[1]/2 - goal_width/2 > vel[1]*s2+pos[1]+w2[1]:
+                    A[1] = surface[1]/2 - goal_width/2
+                elif vel[1]*s2+pos[1]+w2[1] >  surface[1]/2 + goal_width/2:
+                    A[1] = surface[1]/2 + goal_width/2
+        else:
+            if vel[1] > 0:
+                A[1] = surface[1]/2 + goal_width/2
+            else:
+                A[1] = surface[1]/2 - goal_width/2
+    return A, bounces
+
+
 def update_puck(t, mask):
     vel = puck_vel[mask]
     pos = puck_pos[mask]
-    #w = np.column_stack((p_vel[:,1], -p_vel[:,0]))
     v_norm = np.sqrt(np.sum(vel**2, axis=1))
-    v_norm_mask = (v_norm != 0)
-    #w = puck_radius * W[v_norm_mask] / v_norm[v_norm_mask]
+
     new_pos = np.empty_like(pos)
     new_vel = np.empty_like(vel)
 
-    new_vel[~v_norm_mask] = 0
-    new_pos[~v_norm_mask] = pos[~v_norm_mask]
+    recurr_mask_m = np.full((len(v_norm)), False)
+    recurr_time_m = np.empty_like(t, dtype="float32")
 
-    if not np.any(v_norm_mask):
-        recurr_mask = np.full((game_number), False)
-        recurr_time = np.empty((game_number))
-        return new_pos, new_vel, recurr_mask, recurr_time
-    
-    vel = vel[v_norm_mask]
-    v_norm = v_norm[v_norm_mask]
-    pos = pos[v_norm_mask]
+    v_norm_mask = (v_norm != 0)
 
-    recurr_mask_global = np.full((game_number), False)
-    recurr_time_global = np.empty((game_number))
+    if np.any(~v_norm_mask):
+        recurr_mask_m[~v_norm_mask] = False
+        new_pos[~v_norm_mask] = pos[~v_norm_mask]
+        new_vel[~v_norm_mask] = 0
 
-    recurr_mask = recurr_mask_global[mask]
-    recurr_time = recurr_time_global[mask]
-
+    v_norm[~v_norm_mask] = 1
     dir = vel / np.tile(v_norm[:, np.newaxis], (1, 2))
 
-    #Compute constants for movement
-    Bm = drag[mask][v_norm_mask]
-    fm = friction[mask][v_norm_mask]
-    massm = mass[mask][v_norm_mask]
-    resm = res[mask][v_norm_mask]
-    t = t[mask][v_norm_mask]
+    Bm = drag[mask]
+    fm = friction[mask]
+    massm = mass[mask]
+    resm = res[mask]
+    bounds_puckm = bounds_puck[mask]
  
     C = getC(v_norm, Bm, fm)
     D = getD(Bm, massm, fm, C)
     dPdt = dP(t, Bm, fm, massm, C, D)
+    vt = velocity(t, Bm, fm, massm, C)
 
-    """
     #check if it lies outside the playing area (i.e. somewhat in the goal) and will collide with a corner
-    bounces = False
-    A = [0,0]
-    A[0], bounces, s2 = check_in_goal(vel, pos, w)
-    dPt = dP(t)
-    vt = velocity(t)
-    
-    if bounces:
-        if surface[1]/2 - goal_width/2 > vel[1]*s2+pos[1]+w[1]:
-            A[1] = surface[1]/2 - goal_width/2
-        elif vel[1]*s2+pos[1]+w[1] >  surface[1]/2 + goal_width/2:
-            A[1] = surface[1]/2 + goal_width/2
+    in_goal_mask = np.logical_or(pos[:,0] < bounds_puck[mask][:,0,0], pos[:,0] > bounds_puck[mask][:,0,1]) & v_norm_mask
 
-        return corner_collision(A, pos, vel, t, final_pos, C, D, tPZero, v_norm, dPZero, dir, dPt, vt, t_init)
-    
-    #Check if its going into the goal without hitting a corner
-    s1 = 0
-    s2 = 0
-    y1 = 0
-    y2 = 0
-    if abs(vel[0]) != 0:
-        if vel[0] < 0:
-            s1 = (-pos[0] - w[0]) / vel[0]
-            s2 = (-pos[0] + w[0]) / vel[0]
-        elif vel[0] > 0:
-            s1 = (-pos[0] - w[0] + surface[0]) / vel[0]
-            s2 = (-pos[0] + w[0] + surface[0]) / vel[0]
-        y1 = pos[1] + w[1] + s1*vel[1]
-        y2 = pos[1] - w[1] + s2*vel[1]
+    if np.any(in_goal_mask):
+        for idx in np.where(in_goal_mask)[0]:
+            point_A, bounces = check_in_goal(vel[idx], pos[idx], v_norm[idx])
+            if bounces:
+                new_pos[idx], new_vel[idx], recurr_mask_m[idx], recurr_time_m[idx] = corner_collision(point_A, pos[idx], vel[idx],\
+                                                                                                t[idx], C[idx], D[idx], v_norm[idx],\
+                                                                                                dir[idx], dPdt[idx],Bm[idx],fm[idx],\
+                                                                                                    massm[idx], vt[idx], resm[idx])
+                v_norm_mask[idx] = False
 
-        #both side rays enter goal
-        if surface[1]/2 - goal_width/2 < y1 < surface[1]/2 + goal_width/2 and surface[1]/2 - goal_width/2 < y2 < surface[1]/2 + goal_width/2:
-            for j in range(2):
-                if t > tPZero:
-                    new_pos[j] = final_pos[j]
-                else:
-                    new_pos[j] = pos[j] + dPt * dir[j]
-                    new_vel[j] = vt * dir[j]
-
-            arr = puck_mallet_collision(pos, vel, velocity(t), t, t_init)
-            #x_p, x_m, v_p, v_m, dt_sum
-            if len(arr) > 1:
-                new_pos = arr[0]
-                new_vel = arr[2]
-                return update_puck(t-arr[4], new_pos, new_vel, t_init+arr[4])
-
-            return new_pos, new_vel
-    """
-        
 
     #Compute which wall it will hit if it keeps moving
     vel_x_0 = (vel[:,0] == 0)
@@ -269,21 +376,51 @@ def update_puck(t, mask):
     #distance, bounds_puck: (game, x/y, lower/upper)
     #pos, vel: (game, x/y)
     #v_norm: (game,)
-    distances = (bounds_puck[mask] - pos[:,:,None]) / vel[:,:,None] * v_norm[:,None,None]
+    distances = (bounds_puckm - pos[:,:,None]) / vel[:,:,None] * v_norm[:,None,None]
     distances[:,0,:] = np.where(vel_x_0[:,None], -1, distances[:,0,:])
     distances[:,1,:] = np.where(vel_y_0[:,None], -1, distances[:,1,:])
 
     s_xy = np.maximum(distances[:,:,0], distances[:,:,1])
     s_xy = np.where(s_xy < 0, np.inf, s_xy)
 
+    vel[:,1] = np.where(vel_y_0, 0, vel[:,1])
+
     #game,
     s = np.min(s_xy, axis=1)
 
-    hit_wall_mask = (s < dPdt)
+    hit_wall_mask = (s < dPdt) & v_norm_mask
+    
+    #(game, lower/upper)
+    side_bounds = np.full_like(pos, (0, surface[0]))
+    y_hit = vel[:,1, None] * side_bounds / vel[:,0, None] + pos[:,1,None] - vel[:,1, None] * pos[:,0,None] / vel[:,0, None]
+    y_hit = np.where(vel[:,0] > 0, y_hit[:,1], y_hit[:,0]) 
 
-    new_pos2 = np.empty_like(pos)
-    new_vel2 = np.empty_like(vel)
-    #t, dist, B, f, mass, C, D
+    y_goal_top = (y_hit + puck_radius * v_norm / np.abs(vel[:,0]) < surface[1]/2 + goal_width/2)
+    y_goal_bottom = (y_hit - puck_radius * v_norm / np.abs(vel[:,0]) > surface[1]/2 - goal_width/2)
+
+    enters_goal = y_goal_top & y_goal_bottom
+    enters_goal = np.where(vel_x_0, False, enters_goal)
+
+    vel[:,0] = np.where(vel_x_0, 0, vel[:,0])
+    
+    if np.any(enters_goal):
+        hit_wall_mask = hit_wall_mask & ~enters_goal
+    
+    corner_hit_mask = np.full_like(hit_wall_mask, False)
+    
+    if np.any(hit_wall_mask):
+        wall_dist = s[hit_wall_mask]
+        wall = np.argmin(s_xy[hit_wall_mask], axis=1)
+
+        y_wall = pos[hit_wall_mask][:,1] + wall_dist * np.where(vel_y_0[hit_wall_mask], 0, vel[hit_wall_mask][:,1]) / v_norm[hit_wall_mask]
+        corner_hit = (surface[1]/2 - goal_width/2 < y_wall) & (y_wall < surface[1]/2 + goal_width/2)
+
+        hit_wall_mask_indices = np.where(hit_wall_mask)[0]
+        corner_hit_indicies = hit_wall_mask_indices[corner_hit]
+
+        corner_hit_mask[corner_hit_indicies] = True
+        hit_wall_mask = hit_wall_mask & ~corner_hit_mask
+
     if np.any(hit_wall_mask):
         wall_dist = s[hit_wall_mask]
         wall = np.argmin(s_xy[hit_wall_mask], axis=1)
@@ -299,97 +436,53 @@ def update_puck(t, mask):
                                 Bmw, fmw, massmw, Cw, Dw))
 
         #B, f, mass, C, D
-        new_pos2[hit_wall_mask] = pos[hit_wall_mask] + dirw * np.tile(dP(root, Bmw, fmw,\
+        new_pos[hit_wall_mask] = pos[hit_wall_mask] + dirw * np.tile(dP(root, Bmw, fmw,\
                                                     massmw, Cw, Dw)[:, np.newaxis], (1, 2))
         
-        new_vel2_bc = np.tile(velocity(root, Bmw, fmw, massmw, Cw)[:, np.newaxis], (1, 2)) * dirw
-        new_vel2_bc[:,0] = np.where(wall == 0, -resw * new_vel2_bc[:,0], new_vel2_bc[:,0])
-        new_vel2_bc[:,1] = np.where(wall == 0, new_vel2_bc[:,1], - resw * new_vel2_bc[:,1])
-        new_vel2[hit_wall_mask] = new_vel2_bc 
+        new_vel_bc = np.tile(velocity(root, Bmw, fmw, massmw, Cw)[:, np.newaxis], (1, 2)) * dirw
+        new_vel_bc[:,0] = np.where(wall == 0, -resw * new_vel_bc[:,0], resw * new_vel_bc[:,0])
+        new_vel_bc[:,1] = np.where(wall == 0, resw * new_vel_bc[:,1], - resw * new_vel_bc[:,1])
+        new_vel[hit_wall_mask] = new_vel_bc 
 
-        recurr_mask_w = np.full_like(recurr_mask[v_norm_mask], False)
-        recurr_time_w = np.empty_like(recurr_time[v_norm_mask])
-        recurr_mask_w[hit_wall_mask] = True
-        recurr_time_w[hit_wall_mask] = tw-root
-        recurr_mask[v_norm_mask] = recurr_mask_w
-        recurr_time[v_norm_mask] = recurr_time_w
-
-    if np.any(~hit_wall_mask):
-        Bmw = Bm[~hit_wall_mask]
-        fmw = fm[~hit_wall_mask]
-        massmw = massm[~hit_wall_mask]
-        Cw = C[~hit_wall_mask]
-        Dw = D[~hit_wall_mask]
-        tw = t[~hit_wall_mask]
-        new_pos2[~hit_wall_mask] = pos[~hit_wall_mask] + dir[~hit_wall_mask] * np.tile(dP(tw, Bmw, fmw, massmw, Cw, Dw)[:, np.newaxis], (1, 2))
-        new_vel2[~hit_wall_mask] = np.tile(velocity(tw, Bmw, fmw, massmw, Cw)[:, np.newaxis], (1, 2)) * dir[~hit_wall_mask]
-
-    new_pos[v_norm_mask] = new_pos2
-    new_vel[v_norm_mask] = new_vel2
-
-    recurr_mask_global[mask] = recurr_mask
-    recurr_time_global[mask] = recurr_time
-
-    return new_pos, new_vel, recurr_mask_global, recurr_time_global
-    #thit_min = -1
-    #if thit > 0:
-    #    thit_min = thit
-
-    """
+        recurr_mask_m[hit_wall_mask] = True
+        recurr_time_m[hit_wall_mask] = tw-root
 
 
-    #If it doesn't hit the wall in time, use the normal equations
-    if thit_min == -1 or t < thit_min:
-        arr = puck_mallet_collision(pos, vel, velocity(t), t, t_init)
-        #x_p, x_m, v_p, v_m, dt_sum
-        if len(arr) > 1:
-            new_pos = arr[0]
-            new_vel = arr[2]
-            count_err += 1
-            return update_puck(t-arr[4], new_pos, new_vel, t_init+arr[4])
-        
-        for j in range(2):
-            if t > tPZero:
-                new_pos[j] = final_pos[j]
-            else:
-                new_pos[j] = pos[j] + dPt * dir[j]
-                new_vel[j] = vt * dir[j]
+    if np.any(corner_hit_mask):
+        point_A = np.empty((len(corner_hit_indicies), 2))
+        point_A[:,0] = np.where(vel[corner_hit_mask][:,0] > 0, surface[0], 0)
+        point_A[:,1] = np.where(y_hit[corner_hit_mask] > surface[1]/2, surface[1]/2 + goal_width/2, surface[1]/2-goal_width/2)
 
-        return new_pos, new_vel
-    
+        i = 0
+        for idx in corner_hit_indicies:
+            new_pos[idx], new_vel[idx], recurr_mask_m[idx], recurr_time_m[idx] = corner_collision(point_A[i], pos[idx], vel[idx],\
+                                                                                                t[idx], C[idx], D[idx], v_norm[idx],\
+                                                                                                dir[idx], dPdt[idx],Bm[idx],fm[idx],massm[idx], vt[idx], resm[idx])
+            i += 1
 
-    #Check if it will hit the corner or not
-    if wall_idx == 0 and  surface[1]/2 - goal_width/2 < vel[1] * s1 + pos[1] < surface[1]/2 + goal_width/2:
-        A = [0,surface[1]/2 - goal_width/2]
-        if vel[0] > 0:
-            A[0] = surface[0]
-        if (y1+y2)/2 > surface[1]/2:
-            A[1] = surface[1]/2 + goal_width/2
+    no_col_mask = ~hit_wall_mask & ~corner_hit_mask & v_norm_mask
+    if np.any(no_col_mask):
+        Bmw = Bm[no_col_mask]
+        fmw = fm[no_col_mask]
+        massmw = massm[no_col_mask]
+        Cw = C[no_col_mask]
+        Dw = D[no_col_mask]
+        tw = t[no_col_mask]
+        new_pos[no_col_mask] = pos[no_col_mask] + dir[no_col_mask] * np.tile(dP(tw, Bmw, fmw, massmw, Cw, Dw)[:, np.newaxis], (1, 2))
+        new_vel[no_col_mask] = np.tile(vt[no_col_mask][:, np.newaxis], (1, 2)) * dir[no_col_mask]
+        recurr_mask_m[no_col_mask] = False
 
-        return corner_collision(A, pos, vel, t, final_pos, C, D, tPZero, v_norm, dPZero, dir, dPt, vt, t_init)
+    #global recurr_time
+    #global recurr_mask
 
-    #determine if mallet will hit before wall collision
-    arr = puck_mallet_collision(pos, vel, velocity(t), thit_min, t_init)
-    #x_p, x_m, v_p, v_m, dt_sum
-    if len(arr) > 1:
-        new_pos = arr[0]
-        new_vel = arr[2]
-        return update_puck(t-arr[4], new_pos, new_vel, t_init+arr[4])
-    
-    #Go to where it would hit the wall, set position and vel opposit of what they would be
-    dPt_hit = dP(thit_min)
-    vt_hit = velocity(thit_min)
-    for j in range(2):
-        if j == wall_idx:
-            new_pos[j] = pos[j] + dPt_hit * dir[j]
-            new_vel[j] = -res * vt_hit * dir[j]
-        else:
-            new_pos[j] = pos[j] + dPt_hit * dir[j]
-            new_vel[j] = res * vt_hit * dir[j]
-
-
-    return update_puck(t-thit_min, new_pos, new_vel, t_init+thit_min)
-    """
+    #for idx in range(len(new_pos)):
+    #    if ((new_pos[idx,0]**2 + (new_pos[idx,1] - surface[1]/2-goal_width/2)**2) < puck_radius**2-1e-6) or\
+    #            ((new_pos[idx,0]**2 + (new_pos[idx,1] - surface[1]/2+goal_width/2)**2) < puck_radius**2-1e-6) or\
+    #            (((new_pos[idx,0]-surface[0])**2 + (new_pos[idx,1] - surface[1]/2-goal_width/2)**2) < puck_radius**2-1e-6) or\
+    #            (((new_pos[idx,0]-surface[0])**2 + (new_pos[idx,1] - surface[1]/2+goal_width/2)**2) < puck_radius**2-1e-6):
+    #        print(idx)
+    #        update_puck(recurr_time, recurr_mask)
+    return new_pos, new_vel, recurr_time_m, recurr_mask_m 
 
 
 #A e^(at) + B e^(bt) + Ct + D
@@ -812,42 +905,51 @@ action = 0
 clock = pygame.time.Clock()
 timer = clock.tick(60) / 1000.0
 index = 0
-#puck_vel = np.array([[0,4], [0,-2]], dtype="float32")
+
 while True:
     #(game, player, x/y)
     recurr_mask = np.full((game_number), True)
-    recurr_time = np.full((game_number), Ts/N)
+    recurr_time = np.full((game_number), Ts/N, dtype="float32")
     while np.any(recurr_mask):
-        puck_pos[recurr_mask], puck_vel[recurr_mask], recurr_mask, recurr_time = update_puck(recurr_time, recurr_mask)
+        puck_pos[recurr_mask], puck_vel[recurr_mask], recurr_time[recurr_mask], recurr_mask[recurr_mask], = update_puck(recurr_time[recurr_mask], recurr_mask)
+        
 
-    not_moving_mask = (puck_vel[:,0] == 0) & (puck_vel[:,1] == 0)  # Shape (n,)
+    out_of_bounds = np.logical_or(np.logical_or((puck_pos[:,1] < bounds_puck[:,1,0]-1e-6), (puck_pos[:,1] > bounds_puck[:,1,1]+1e-6)),\
+                        (np.logical_or((puck_pos[:,0] < bounds_puck[:,0,0]-1e-6), (puck_pos[:,0] > bounds_puck[:,0,1]+1e-6))) &\
+                        (np.logical_or(puck_pos[:,1] < surface[1]/2-goal_width/2, puck_pos[:,1]>surface[1]/2+goal_width/2)))
 
-    if np.any(not_moving_mask):
-        puck_vel[not_moving_mask] = np.random.uniform(-100, 100, size=(not_moving_mask.sum(), 2))
-
-    out_of_bounds = np.logical_or((puck_pos < bounds_puck[:,:,0]), (puck_pos > bounds_puck[:,:,1]))
     if np.any(out_of_bounds):
-        print("OUT OF BOUNDS")
-        screen.fill(white)
-        for i in range(99):
-            if puck_pos[i,0] < bounds_puck[i,0,0] or puck_pos[i,0] > bounds_puck[i,0,1] or\
-               puck_pos[i,1] < bounds_puck[i,1,0] or puck_pos[i,1] > bounds_puck[i,1,1]:
-                pygame.draw.circle(screen, blue, (int(round(puck_pos[i,0]*plr)), int(round(puck_pos[i,1]*plr))), puck_radius*plr)
-                pygame.display.flip()
-                print(puck_pos[i,0])
-                print(puck_pos[i,1])
-                N = 1000
-                index = i
-                break
+        index = np.where(out_of_bounds)[0][0]
+        y1 = puck_pos[index,1] - puck_vel[index,1]*puck_pos[index,0]/puck_vel[index,0]
+        y2 = puck_pos[index,1] - puck_vel[index,1]*puck_pos[index,0]/puck_vel[index,0] + puck_vel[index,1] * surface[0] / puck_vel[index,0]
+        if ((y1 < surface[1]/2-goal_width/2 or y1 > surface[1]/2+goal_width/2) and (y2 < surface[1]/2-goal_width/2 or  y2 > surface[1]/2+goal_width/2)) or\
+            ((puck_pos[index,0]**2 + (puck_pos[index,1] - surface[1]/2-goal_width/2)**2) < puck_radius**2) or\
+            ((puck_pos[index,0]**2 + (puck_pos[index,1] - surface[1]/2+goal_width/2)**2) < puck_radius**2) or\
+            (((puck_pos[index,0]-surface[0])**2 + (puck_pos[index,1] - surface[1]/2-goal_width/2)**2) < puck_radius**2) or\
+            (((puck_pos[index,0]-surface[0])**2 + (puck_pos[index,1] - surface[1]/2+goal_width/2)**2) < puck_radius**2):
+            print("OUT OF BOUNDS")
+            screen.fill(white)
+            pygame.draw.rect(screen, red, pygame.Rect(0, screen_height/2-goal_width*plr/2, 5, goal_width*plr))
+            pygame.draw.rect(screen, red, pygame.Rect(screen_width-5, screen_height/2-goal_width*plr/2, 5, goal_width*plr))
+            pygame.draw.circle(screen, blue, (int(round(puck_pos[index,0]*plr)), int(round(puck_pos[index,1]*plr))), puck_radius*plr)
+            pygame.display.flip()
+            print(3/0)
+        puck_pos = np.maximum(puck_pos, bounds_puck[:,:,0]+1e-8)
+        puck_pos = np.minimum(puck_pos, bounds_puck[:,:,1]-1e-8)
 
-    puck_pos = np.maximum(puck_pos, bounds_puck[:,:,0]+1e-8)
-    puck_pos = np.minimum(puck_pos, bounds_puck[:,:,1]-1e-8)
+    entered_goal_mask = np.logical_or(puck_pos[:,0] < 0, puck_pos[:,0] > surface[0])
+    not_moving_mask = (puck_vel[:,0] == 0) & (puck_vel[:,1] == 0) 
 
+    restart_mask = np.logical_or(entered_goal_mask, not_moving_mask)
 
-    #pos = get_pos(time)
-    #if time >= Ts:
-    #    update_path(time)
-    #    time = 0
+    if np.any(restart_mask):
+        puck_vel[restart_mask] = np.random.uniform(-3, 3, size=(restart_mask.sum(), 2))
+        puck_pos[restart_mask] = np.random.uniform(0.4, 0.6, size=(restart_mask.sum(), 2))
+
+    pos = get_pos(time)
+    if time >= Ts:
+        update_path(time)
+        time = 0
 
     #position1 = [pos[0][0][0] * plr, pos[0][0][1] * plr]
     #position2 = [pos[0][1][0] * plr, pos[0][1][1] * plr]
@@ -862,14 +964,15 @@ while True:
         #pygame.draw.circle(screen, black, (int(round(position2[0])), int(round(position2[1]))), mallet_radius*plr)
         #pygame.draw.circle(screen, red, (int(x_f[0,0,0]*plr), int(x_f[0,0,1]*plr)), 5)
         #pygame.draw.circle(screen, red, (int(x_f[0,1,0]*plr), int(x_f[0,1,1]*plr)), 5)
-
-        pygame.draw.circle(screen, blue, (int(round(puck_pos[i,0]*plr)), int(round(puck_pos[i,1]*plr))), puck_radius*plr)
+        pygame.draw.rect(screen, red, pygame.Rect(0, screen_height/2-goal_width*plr/2, 5, goal_width*plr))
+        pygame.draw.rect(screen, red, pygame.Rect(screen_width-5, screen_height/2-goal_width*plr/2, 5, goal_width*plr))
+        pygame.draw.circle(screen, blue, (int(round(puck_pos[index,0]*plr)), int(round(puck_pos[index,1]*plr))), puck_radius*plr)
         pygame.display.flip()
-
-    action += 1
-    if action % int(0.1*3600/Ts) == 0:
-        print(clock.tick(60) / 1000.0)
-        print(action * Ts / 3600)
+    else:
+        action += 1
+        if action % int(0.1*3600/Ts) == 0:
+            print(clock.tick(60) / 1000.0)
+            print(action * Ts / 3600)
 
     time += Ts/N
 
@@ -880,3 +983,6 @@ while True:
 #with puck (only wall collision)
 #100 games: 28.731 sec / 0.1 hour, 1253 speedup,  
 #1000 games: 113 / 0.1 hour, 3185 speedup
+
+#with puck and mallet (no puck mallet collision)
+#1000 games: 98 sec / 0.1 hour, 3673 speedup

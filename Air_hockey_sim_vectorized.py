@@ -405,6 +405,7 @@ def puck_mallet_collision(mask, pos, vel, dir, dt_col, t_init, C, D, Bm, fm, mas
     C4m = C4[mask]
     am = a[mask]
     a2m = a2[mask]
+    full_timem = np.zeros_like(dt_col)
 
     v_m = get_xp_mask(t_init+dt_sum, CEm, A2CEm, A3CEm, A4CEm, abm, am, a2m, C1m, C2m, C3m, C4m)
 
@@ -418,17 +419,30 @@ def puck_mallet_collision(mask, pos, vel, dir, dt_col, t_init, C, D, Bm, fm, mas
 
     global_mask = mask_indicies
     mallet_mask = np.empty_like(collision_unknown)
+    v_m_a2 = np.full((len(collision_unknown), 2, 2), 1.0)
 
     counter = 0
     while True:
-        global_mask = mask_indicies[collision_unknown]
 
+        if np.any(np.tile(full_timem[:,np.newaxis,np.newaxis], (1,2,2)) > a2m):
+            v_m_a2 = get_xp_mask_a2(CEm, A2CEm, A3CEm, A4CEm, abm, am, a2m, C1m, C2m, C3m, C4m)
+        else:
+            v_m_a2 = np.empty_like(am)
         #if counter == 150:
         #    pass
+        #if v_m_a2.shape[0] == 2 and x_p.shape[0] == 1:
+        #    pass
 
-        dt_dynamic[collision_unknown] = puck_mallet_collision_t(x_p, x_m, v_p,\
-                                                                 v_m, vpf[collision_unknown],\
-                                                                 global_mask, dir[collision_unknown], dt_sum[collision_unknown])
+        if not np.any(colided_mask):
+            dt_dynamic[collision_unknown] = puck_mallet_collision_t(x_p, x_m, v_p,\
+                                                                    v_m, vpf[collision_unknown],\
+                                                                     dir[collision_unknown], dt_sum[collision_unknown],\
+                                                                        v_m_a2, am, a2m, C1m, CEm)
+        else:
+            dt_dynamic[collision_unknown] = puck_mallet_collision_t(x_p, x_m, v_p,\
+                                                                    v_m, vpf[collision_unknown],\
+                                                                    dir[collision_unknown], dt_sum[collision_unknown],\
+                                                                        v_m_a2[~colided_mask], am[~colided_mask], a2m[~colided_mask], C1m[~colided_mask], CEm[~colided_mask])
 
         mallet_mask2 = ~(dt_dynamic[collision_unknown] == -1) & ((dt_sum+np.maximum(dt_dynamic, 1e-6))[collision_unknown] <= dt_col[collision_unknown])
 
@@ -567,7 +581,7 @@ def puck_mallet_collision(mask, pos, vel, dir, dt_col, t_init, C, D, Bm, fm, mas
             if not np.any(collision_unknown):
                 break
 
-            colided_mask = colided_mask_m1 | colided_mask_m2
+            colided_mask = np.logical_or(colided_mask_m1, colided_mask_m2)
 
             x_p = x_p[~colided_mask]
             v_p = v_p[~colided_mask]
@@ -594,14 +608,12 @@ def puck_mallet_collision(mask, pos, vel, dir, dt_col, t_init, C, D, Bm, fm, mas
     return new_pos, new_vel, dt_sum, collision_mask 
 
 
-def puck_mallet_collision_t(x_p, x_m, v_p, v_m, vpf, mask, d_p, t):
+def puck_mallet_collision_t(x_p, x_m, v_p, v_m, vpf, d_p, t, v_m_a2, am, a2m, C1m, CEm):
     #(game, player)
-    global a
-    global a2
 
     t = np.tile(t[:, np.newaxis, np.newaxis], (1, 2, 2))
-    v_max_mallet = np.where((t > a[mask]) & (t < a2[mask]), v_m, np.maximum(np.abs(C1[mask] * CE[mask][:,:,:,2]), np.abs(v_m)))
-    v_max_mallet = np.where(t > a2[mask], get_xp_a2(a2)[mask], v_max_mallet)
+    v_max_mallet = np.where((t > am) & (t < a2m), v_m, np.maximum(np.abs(C1m * CEm[:,:,:,2]), np.abs(v_m)))
+    v_max_mallet = np.where(t > a2m, v_m_a2, v_max_mallet)
     v_max_mallet = np.sqrt(np.sum(v_max_mallet**2, axis=-1))
 
     vp_norm = np.tile(np.sqrt(np.sum(v_p**2, axis=1))[:, np.newaxis], (1, 2))
@@ -617,7 +629,7 @@ def puck_mallet_collision_t(x_p, x_m, v_p, v_m, vpf, mask, d_p, t):
     d_par = np.sum(np.tile(d_p[:,np.newaxis,:], (1,2,1))*x, axis=-1)
 
     #(game,player)
-    t = np.full((len(mask), 2), -1, dtype="float32")
+    t = np.full_like(x_p, -1, dtype="float32")
     vP = np.empty_like(t)
 
     R = puck_radius + mallet_radius
@@ -665,7 +677,7 @@ def update_puck(t, mask, t_init):
     pos = puck_pos[mask]
     v_norm = np.sqrt(np.sum(vel**2, axis=1))
 
-    global_mask = np.where(mask)[0]
+    global_mask = mask#np.where(mask)[0]
     full_time = np.zeros((game_number))
     full_time[global_mask] = t_init
     x_m = get_pos(full_time)[global_mask]
@@ -1052,29 +1064,32 @@ def get_xp_mask(t, CEm, A2CEm, A3CEm, A4CEm, abm, am, a2m, C1m, C2m, C3m, C4m):
 
     return C1m * (f_t - 2*g_a1 + g_a2) + C2m * A2 + C3m * A3 + C4m * A4
 
-def get_xp_a2(t):
-    #t: (gamenumber, player, x/y)
+def get_xp_mask_a2(CEm, A2CEm, A3CEm, A4CEm, abm, am, a2m, C1m, C2m, C3m, C4m):
+    #t: (gamenumber)
 
     #(gamenumber, player, x/y, a/b)
-    exponentials = ab * np.exp(ab*np.tile(t[:,:,:,np.newaxis], (1,1,1,2)))
+    exponentials = abm * np.exp(abm*np.tile(a2m[:,:,:,np.newaxis], (1,1,1,2)))
 
     #shape (game, player, x/y)
-    A2 = A2CE[:,:,:,0] * exponentials[:,:,:,0] +\
-        A2CE[:,:,:,1] * exponentials[:,:,:,1]
+    A2 = A2CEm[:,:,:,0] * exponentials[:,:,:,0] +\
+        A2CEm[:,:,:,1] * exponentials[:,:,:,1]
     
-    A3 = A3CE[:,:,:,0] * exponentials[:,:,:,0] +\
-        A3CE[:,:,:,1] * exponentials[:,:,:,1]
+    A3 = A3CEm[:,:,:,0] * exponentials[:,:,:,0] +\
+        A3CEm[:,:,:,1] * exponentials[:,:,:,1]
     
-    A4 = A4CE[:,:,:,0] * exponentials[:,:,:,0] +\
-        A4CE[:,:,:,1] * exponentials[:,:,:,1]
+    A4 = A4CEm[:,:,:,0] * exponentials[:,:,:,0] +\
+        A4CEm[:,:,:,1] * exponentials[:,:,:,1]
     
-    f_t = CE[:,:,:,0] * exponentials[:,:,:,0] +\
-          CE[:,:,:,1] * exponentials[:,:,:,1] + CE[:,:,:,2]
-    
-    tms = np.maximum(t-a, 0)
-    g_a1 = np.where(tms > 0, g_x(tms), 0)
+    f_t = CEm[:,:,:,0] * exponentials[:,:,:,0] +\
+          CEm[:,:,:,1] * exponentials[:,:,:,1] + CEm[:,:,:,2]
 
-    return C1 * (f_t - 2*g_a1) + C2 * A2 + C3 * A3 + C4 * A4
+    tms = a2m-am
+    tms_tile = np.tile(np.expand_dims(tms, axis=-1), (1,1,1,2))
+    exponentials =  abm * np.exp(abm*tms_tile)
+    g_a1 = CEm[:,:,:,0] * exponentials[:,:,:,0] +\
+                    CEm[:,:,:,1] * exponentials[:,:,:,1] + CEm[:,:,:,2]
+
+    return C1m * (f_t - 2*g_a1) + C2m * A2 + C3m * A3 + C4m * A4
 
 
 def get_xpp(t):
@@ -1407,17 +1422,23 @@ def step(t):
     recurr_mask[reset_mask] = False
     recurr_time = np.full((game_number), t, dtype="float32")
     counter = 0
-    #print("--")
+    indexed = False
+    
     while np.any(recurr_mask):
         counter += 1
         if counter == 100:
             puck_pos[recurr_mask] = np.array([1,-1])
             puck_vel[recurr_mask] = np.array([0,0])
-        #clock.tick(60)
-        puck_pos[recurr_mask], puck_vel[recurr_mask], recurr_time[recurr_mask], recurr_mask[recurr_mask] = update_puck(recurr_time[recurr_mask], recurr_mask, time + (t-recurr_time)[recurr_mask])
-        #print(clock.tick(60)/1000.0)
-        #print(counter)
-        #print("---")
+
+        if recurr_mask.sum() / len(recurr_mask) < 0.1 and not indexed:
+            indexed = True
+            recurr_mask = np.array(np.where(recurr_mask)[0])
+            
+        if not indexed:
+            puck_pos[recurr_mask], puck_vel[recurr_mask], recurr_time[recurr_mask], recurr_mask[recurr_mask] = update_puck(recurr_time[recurr_mask], recurr_mask, time + (t-recurr_time)[recurr_mask])
+        else:
+            puck_pos[recurr_mask], puck_vel[recurr_mask], recurr_time[recurr_mask], recurr_mask2 = update_puck(recurr_time[recurr_mask], recurr_mask, time + (t-recurr_time)[recurr_mask])
+            recurr_mask = recurr_mask[recurr_mask2]
     time += t
     mallet_pos[np.logical_not(reset_mask)] = get_pos(np.full((game_number), time))[np.logical_not(reset_mask)]
     

@@ -31,7 +31,7 @@ screen = pygame.display.set_mode((screen_width, screen_height))
 pygame.display.set_caption("Air Hockey")
 
 
-def initalize(agents, mallet_r=0.05, puck_r=0.05, goal_w=0.35, V_max=24):
+def initalize(envs, mallet_r=0.05, puck_r=0.05, goal_w=0.35, V_max=24):
     global game_number 
     global time
     global mallet_radius
@@ -57,7 +57,7 @@ def initalize(agents, mallet_r=0.05, puck_r=0.05, goal_w=0.35, V_max=24):
 
     time = 0
 
-    game_number = agents
+    game_number = envs
     mallet_radius = mallet_r
     puck_radius = puck_r
 
@@ -417,21 +417,17 @@ def puck_mallet_collision(mask, pos, vel, dir, dt_col, t_init, C, D, Bm, fm, mas
     tolerance = 1e-6
     radius_col = (puck_radius + mallet_radius + tolerance)**2
 
-    global_mask = mask_indicies
+    #global_mask = mask_indicies
     mallet_mask = np.empty_like(collision_unknown)
     v_m_a2 = np.full((len(collision_unknown), 2, 2), 1.0)
 
-    counter = 0
+    #counter = 0
     while True:
 
         if np.any(np.tile(full_timem[:,np.newaxis,np.newaxis], (1,2,2)) > a2m):
             v_m_a2 = get_xp_mask_a2(CEm, A2CEm, A3CEm, A4CEm, abm, am, a2m, C1m, C2m, C3m, C4m)
         else:
             v_m_a2 = np.empty_like(am)
-        #if counter == 150:
-        #    pass
-        #if v_m_a2.shape[0] == 2 and x_p.shape[0] == 1:
-        #    pass
 
         if not np.any(colided_mask):
             dt_dynamic[collision_unknown] = puck_mallet_collision_t(x_p, x_m, v_p,\
@@ -448,7 +444,6 @@ def puck_mallet_collision(mask, pos, vel, dir, dt_col, t_init, C, D, Bm, fm, mas
 
         collision_unknown = (collision_unknown & ~(dt_dynamic == -1))
         dt_dynamic[collision_unknown] = np.maximum(dt_dynamic[collision_unknown], 1e-6)
-        #print(dt_dynamic[collision_unknown][0])
         dt_sum[collision_unknown] += dt_dynamic[collision_unknown]
         collision_unknown = collision_unknown & ~(dt_sum > dt_col)
 
@@ -461,12 +456,6 @@ def puck_mallet_collision(mask, pos, vel, dir, dt_col, t_init, C, D, Bm, fm, mas
         vpp = velocity(dt_sum[collision_unknown], Bm[collision_unknown], fm[collision_unknown], massm[collision_unknown], C[collision_unknown])
         v_p = np.tile(vpp[:,np.newaxis], (1,2)) * dir[collision_unknown]
         
-        #global_mask = mask_indicies[collision_unknown]
-        #full_time = np.zeros((game_number))
-        #full_time[global_mask] = t_init[collision_unknown]+dt_sum[collision_unknown]
-
-        #1st: collision_unknown
-        #2nd: 
         if np.any(colided_mask):
             mallet_mask3 = np.full_like(colided_mask, False)
             mallet_mask3[np.where(~colided_mask)[0][mallet_mask2]] = True
@@ -488,20 +477,16 @@ def puck_mallet_collision(mask, pos, vel, dir, dt_col, t_init, C, D, Bm, fm, mas
         a2m = a2m[mallet_mask]
 
         #print(len(full_timem))
-        counter += 1
+        #counter += 1
         #print(counter)
         if abm.shape[0] != full_timem.shape[0]:
             pass
 
-        #global_mask = global_mask[np.where(collision_unknown)[0]]
         x_m = get_pos_mask(full_timem, CEm, A2CEm, A3CEm, A4CEm, abm, am, a2m, C1m, C2m, C3m, C4m)
         v_m = get_xp_mask(full_timem, CEm, A2CEm, A3CEm, A4CEm, abm, am, a2m, C1m, C2m, C3m, C4m)
 
         colided_mask_m1 = ((x_p[:,0] - x_m[:,0,0])**2 + (x_p[:,1]-x_m[:,0,1])**2) < radius_col
         colided_mask_m2 = (((x_p[:,0] - x_m[:,1,0])**2 + (x_p[:,1]-x_m[:,1,1])**2) < radius_col) & ~colided_mask_m1
-    
-        #if global_mask[0] == 0:
-        #print(len(full_timem))
     
         """
         if len(full_timem) < 6:
@@ -522,7 +507,6 @@ def puck_mallet_collision(mask, pos, vel, dir, dt_col, t_init, C, D, Bm, fm, mas
 
             tme.sleep(1.0)
         """
-    
 
         collision_indices_m1 = []
         collision_indices_m2 = []
@@ -586,25 +570,11 @@ def puck_mallet_collision(mask, pos, vel, dir, dt_col, t_init, C, D, Bm, fm, mas
             x_p = x_p[~colided_mask]
             v_p = v_p[~colided_mask]
 
-            #x_p = pos[collision_unknown] + np.tile(dP(dt_sum[collision_unknown], Bm[collision_unknown], fm[collision_unknown],\
-            #                               massm[collision_unknown], C[collision_unknown], D[collision_unknown])[:,np.newaxis], (1,2)) * dir[collision_unknown]
-            #v_p = np.tile(velocity(dt_sum[collision_unknown], Bm[collision_unknown], fm[collision_unknown], massm[collision_unknown], C[collision_unknown])[:,np.newaxis], (1,2)) * dir[collision_unknown]
-            
-            #global_mask = np.where(mask)[0][np.where(collision_unknown)[0]]
-            #x_m = get_pos(time+dt_sum)[global_mask]
-            #v_m = get_xp(time+dt_sum)[global_mask]
             x_m = x_m[~colided_mask]
             v_m = v_m[~colided_mask]
-
-            #global_mask = mask_indicies[collision_unknown]
-            #full_time = np.zeros((game_number))
-            #full_time[global_mask] = t_init[collision_unknown]+dt_sum[collision_unknown]
-            #x_m = get_pos(full_time)[global_mask]
-            #v_m = get_xp(full_time)[global_mask]
         else:
             colided_mask = np.array([False])
-    #if not np.any(~mask):
-    #print(counter)
+    
     return new_pos, new_vel, dt_sum, collision_mask 
 
 
@@ -661,8 +631,6 @@ def puck_mallet_collision_t(x_p, x_m, v_p, v_m, vpf, d_p, t, v_m_a2, am, a2m, C1
         t = (-sb - np.sqrt(sb**2 - 4*sa*sc)) / (2*sa)
 
     t[np.isnan(t) | np.isinf(t)] = np.inf
-    #intersect = (x[:,:,0]**2 + x[:,:,1]**2 < R**2)
-    #t[intersect] = 0
     t[t < 0] = np.inf
     small_dt = t < 1e-3
     t = np.where(small_dt, np.maximum(t, np.minimum(1e-3, (np.sqrt(np.sum(x**2,axis=-1)) - R)/(v_perp))), t)
@@ -672,9 +640,13 @@ def puck_mallet_collision_t(x_p, x_m, v_p, v_m, vpf, d_p, t, v_m_a2, am, a2m, C1
     return t
 
 
-def update_puck(t, mask, t_init):
-    vel = puck_vel[mask]
-    pos = puck_pos[mask]
+def update_puck(t, mask, t_init, no_M = False, noM_pos = None, noM_vel = None):
+    if no_M:
+        vel = noM_vel[mask]
+        pos = noM_pos[mask]
+    else:
+        vel = puck_vel[mask]
+        pos = puck_pos[mask]
     v_norm = np.sqrt(np.sum(vel**2, axis=1))
 
     global_mask = mask#np.where(mask)[0]
@@ -735,6 +707,8 @@ def update_puck(t, mask, t_init):
  
     C = getC(v_norm, Bm, fm)
     D = getD(Bm, massm, fm, C)
+    C[~v_norm_mask] = 0
+    D[~v_norm_mask] = 0
     dPdt = dP(t, Bm, fm, massm, C, D)
     vt = velocity(t, Bm, fm, massm, C)
 
@@ -859,32 +833,29 @@ def update_puck(t, mask, t_init):
         new_vel[no_col_mask] = np.tile(vt[no_col_mask][:, np.newaxis], (1, 2)) * dir[no_col_mask]
         recurr_mask_m[no_col_mask] = False
 
-    dt_col = np.where(recurr_mask_m, t-recurr_time_m, t)
-    C[~v_norm_mask] = 0
-    D[~v_norm_mask] = 0
-    vpf = velocity(dt_col, Bm, fm, massm, C)
+    if not no_M:
+        dt_col = np.where(recurr_mask_m, t-recurr_time_m, t)
+        vpf = velocity(dt_col, Bm, fm, massm, C)
 
-    #print("A")
-    #print(len(np.where(mask)[0]))
-    pm_pos, pm_vel, pm_time, pm_mask = puck_mallet_collision(mask, pos, vel, dir, dt_col, t_init,\
-                                                              C, D, Bm, fm, massm, resm, vpf, x_m)
-    
-    if np.any(recurr_mask_m) and not np.any(pm_mask):
-        pass
+        #print("A")
+        #print(len(np.where(mask)[0]))
+        pm_pos, pm_vel, pm_time, pm_mask = puck_mallet_collision(mask, pos, vel, dir, dt_col, t_init,\
+                                                                C, D, Bm, fm, massm, resm, vpf, x_m)
 
-    recurr_mask_m = np.logical_or(recurr_mask_m, pm_mask)
-    recurr_time_m[pm_mask] = (t - pm_time)[pm_mask]
-    new_pos[pm_mask] = pm_pos[pm_mask]
-    new_vel[pm_mask] = pm_vel[pm_mask]
 
-    if np.any(pm_mask):
-        pass
+        recurr_mask_m = np.logical_or(recurr_mask_m, pm_mask)
+        recurr_time_m[pm_mask] = (t - pm_time)[pm_mask]
+        new_pos[pm_mask] = pm_pos[pm_mask]
+        new_vel[pm_mask] = pm_vel[pm_mask]
+
+        return new_pos, new_vel, recurr_time_m, recurr_mask_m, pm_mask
 
     #if not np.any(recurr_mask_m):
     #    pm_pos, pm_vel, pm_time, pm_mask = puck_mallet_collision(mask, pos, vel, dir, dt_col, t_init,\
     #                                                          C, D, Bm, fm, massm, resm, vpf)
     #    pass
-    return new_pos, new_vel, recurr_time_m, recurr_mask_m 
+
+    return new_pos, new_vel, recurr_time_m, recurr_mask_m
 
 
 #A e^(at) + B e^(bt) + Ct + D
@@ -1421,28 +1392,55 @@ def step(t):
     recurr_mask = np.full((game_number), True)
     recurr_mask[reset_mask] = False
     recurr_time = np.full((game_number), t, dtype="float32")
+    mallet_hit = np.full((game_number, 2), False)
     counter = 0
     indexed = False
-    
+    #print("--")
+
     while np.any(recurr_mask):
         counter += 1
         if counter == 100:
             puck_pos[recurr_mask] = np.array([1,-1])
             puck_vel[recurr_mask] = np.array([0,0])
-
+        #clock.tick(60)
         if recurr_mask.sum() / len(recurr_mask) < 0.1 and not indexed:
             indexed = True
             recurr_mask = np.array(np.where(recurr_mask)[0])
-            
+        #print(indexed)
         if not indexed:
-            puck_pos[recurr_mask], puck_vel[recurr_mask], recurr_time[recurr_mask], recurr_mask[recurr_mask] = update_puck(recurr_time[recurr_mask], recurr_mask, time + (t-recurr_time)[recurr_mask])
+            puck_pos[recurr_mask], puck_vel[recurr_mask], recurr_time[recurr_mask], recurr_mask2, pm_mask = update_puck(recurr_time[recurr_mask], recurr_mask, time + (t-recurr_time)[recurr_mask])
+            if np.any(pm_mask):
+                mallet_hit[recurr_mask,0] = np.logical_or(pm_mask, mallet_hit[recurr_mask][:,0]) & (puck_pos[recurr_mask][:,0] < surface[0]/2)
+                mallet_hit[recurr_mask,1] = np.logical_or(pm_mask, mallet_hit[recurr_mask][:,1]) & (puck_pos[recurr_mask][:,0] > surface[0]/2)
+            recurr_mask[recurr_mask] = recurr_mask2
         else:
-            puck_pos[recurr_mask], puck_vel[recurr_mask], recurr_time[recurr_mask], recurr_mask2 = update_puck(recurr_time[recurr_mask], recurr_mask, time + (t-recurr_time)[recurr_mask])
+            puck_pos[recurr_mask], puck_vel[recurr_mask], recurr_time[recurr_mask], recurr_mask2, pm_mask = update_puck(recurr_time[recurr_mask], recurr_mask, time + (t-recurr_time)[recurr_mask])
+            if np.any(pm_mask):
+                mallet_hit[recurr_mask[pm_mask],0] = (puck_pos[recurr_mask[pm_mask]][:,0] < surface[0]/2)
+                mallet_hit[recurr_mask[pm_mask],1] = (puck_pos[recurr_mask[pm_mask]][:,0] > surface[0]/2)
             recurr_mask = recurr_mask[recurr_mask2]
+        #print(clock.tick(60)/1000.0)
+        #print(counter)
+        
+        #print("---")
     time += t
     mallet_pos[np.logical_not(reset_mask)] = get_pos(np.full((game_number), time))[np.logical_not(reset_mask)]
+
+    mallet_vel = get_xp(np.full((game_number),time))
     
-    return mallet_pos, puck_pos
+    return mallet_pos, puck_pos, mallet_vel, puck_vel, mallet_hit
+
+def step_noM(t):
+    recurr_mask = np.full((game_number), True)
+    recurr_mask[reset_mask] = False
+    recurr_time = np.full((game_number), t, dtype="float32")
+    puck_pos_noM = np.copy(puck_pos)
+    puck_vel_noM = np.copy(puck_vel)
+
+    while np.any(recurr_mask):
+        puck_pos_noM[recurr_mask], puck_vel_noM[recurr_mask], recurr_time[recurr_mask], recurr_mask[recurr_mask] = update_puck(recurr_time[recurr_mask], recurr_mask, time + (t-recurr_time)[recurr_mask], no_M = True, noM_pos=puck_pos_noM, noM_vel = puck_vel_noM)
+
+    return puck_pos_noM, puck_vel_noM
 
 def take_action(x_f, Vo):
     global time
@@ -1459,6 +1457,7 @@ def check_state():
     out_of_bounds = (np.logical_or((puck_pos[:,0] < bounds_puck[:,0,0]-1e-6), (puck_pos[:,0] > bounds_puck[:,0,1]+1e-6))) &\
                     (np.logical_or(puck_pos[:,1] < surface[1]/2-goal_width/2+puck_radius, puck_pos[:,1]>surface[1]/2+goal_width/2-puck_radius))
 
+    index_arr = set()
     if np.any(out_of_bounds):
         for index in np.where(out_of_bounds)[0]:
             if puck_vel[index,0] != 0:
@@ -1466,6 +1465,7 @@ def check_state():
                 y2 = puck_pos[index,1] - puck_vel[index,1]*puck_pos[index,0]/puck_vel[index,0] + puck_vel[index,1] * surface[0] / puck_vel[index,0]
                 #print("Check")
                 #print(y1)
+                #print(y2)
                 #print(puck_pos[index,:])
                 #print(puck_vel[index,:])
                 if ((puck_pos[index,0] < 0 or puck_pos[index,0] > surface[0]) and\
@@ -1474,22 +1474,24 @@ def check_state():
                     ((puck_pos[index,0]**2 + (puck_pos[index,1] - surface[1]/2+goal_width/2)**2) < puck_radius**2) or\
                     (((puck_pos[index,0]-surface[0])**2 + (puck_pos[index,1] - surface[1]/2-goal_width/2)**2) < puck_radius**2) or\
                     (((puck_pos[index,0]-surface[0])**2 + (puck_pos[index,1] - surface[1]/2+goal_width/2)**2) < puck_radius**2):
-                    return [1, index]
+                    #return [1, index]
+                    index_arr.add(index)
                 
     out_of_bounds = np.logical_or((puck_pos[:,1] < bounds_puck[:,1,0]-1e-6), (puck_pos[:,1] > bounds_puck[:,1,1]+1e-6)) & ~out_of_bounds
     if np.any(out_of_bounds):
         for index in np.where(out_of_bounds)[0]:
-            return [1,index]
+            #return [1,index]
+            index_arr.add(index)
                 
     in_mallet_mask = (np.tile(puck_pos[:,np.newaxis,0], (1,2)) - mallet_pos[:,:,0])**2 + (np.tile(puck_pos[:,np.newaxis,1], (1,2)) - mallet_pos[:,:,1])**2 <\
                         (puck_radius + mallet_radius - 1e-2)**2
     in_mallet_mask = in_mallet_mask[:,0] | in_mallet_mask[:,1]
     
     if np.any(in_mallet_mask):
-        index = np.where(in_mallet_mask)[0][0]
-        return [2,index]
+        for index in np.where(in_mallet_mask)[0]:
+            index_arr.add(index)
     
-    return [0,0]
+    return np.array(list(index_arr))
         
 def check_goal():
     global reset_mask
@@ -1541,38 +1543,30 @@ def display_state(index):
 def get_mallet_bounds():
     return bounds_mallet
 
-def reset_sim(index = np.inf):
+def reset_sim(index = None):#, left_scored= None):
+    if index is None:
+        index = np.array([i for i in range(game_number)])
+    #if left_scored is None:
+    #    left_scored = index
     global reset_mask
     global x_p
     global x_pp
     global puck_vel
     global puck_pos
 
-    if index == np.inf:
-        reset_mask = np.full((game_number), True)
+    reset_mask[index] = True
 
-        mallet_pos[:,0,:] = np.array([0.25,0.5])
-        x_0[:,0,:] = np.array([0.25,0.5])
+    mallet_pos[index,0,:] = np.array([0.25,0.5])
+    x_0[index,0,:] = np.array([0.25,0.5])
 
-        mallet_pos[:,1,:] = np.array([1.75,0.5])
-        x_0[:,1,:] = np.array([1.75,0.5])
+    mallet_pos[index,1,:] = np.array([1.75,0.5])
+    x_0[index,1,:] = np.array([1.75,0.5])
 
-        x_p[:,:] = 0.0
-        x_pp[:,:] = 0.0
+    x_p[index,:] = 0.0
+    x_pp[index,:] = 0.0
 
-        puck_vel[:,:] = np.array([0.0,0.0])
-        puck_pos[:,:] = np.array([0.5,0.5])
-    else:
-        reset_mask[index] = True
+    puck_vel[index,:] = np.array([0.0,0.0])
 
-        mallet_pos[index,0,:] = np.array([0.25,0.5])
-        x_0[index,0,:] = np.array([0.25,0.5])
-
-        mallet_pos[index,1,:] = np.array([1.75,0.5])
-        x_0[index,1,:] = np.array([1.75,0.5])
-
-        x_p[index,:] = 0.0
-        x_pp[index,:] = 0.0
-
-        puck_vel[index,:] = np.array([0.0,0.0])
-        puck_pos[index,:] = np.array([0.5,0.5])
+    puck_pos[index,:] = np.array([0.5,0.5])
+    #left_scored = list(set(index) & set(left_scored))
+    #puck_pos[left_scored,:] = np.array([1.5,0.5])

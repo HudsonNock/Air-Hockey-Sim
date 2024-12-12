@@ -1,6 +1,6 @@
 # Air-Hockey-Sim
 
-Currently a WIP
+Currently a WIP (low framerate due to GIF)
 
 ![air_hockey_cliponline-video-cutter com-ezgif com-video-to-gif-converter](https://github.com/user-attachments/assets/45868e2b-58df-49db-9185-147e5af6fca6)
 

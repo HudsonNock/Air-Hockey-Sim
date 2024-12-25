@@ -1,10 +1,11 @@
 # Air-Hockey-Sim
 
-Currently a WIP (low framerate due to GIF)
+Currently a WIP
 
 The goal of this repo is to train and deploy an agent to play air hockey. The air hockey table has been modified to have a coreXY belt configuration allowing the robot to move the mallet.
 
 ![air_hockey_cliponline-video-cutter com-ezgif com-video-to-gif-converter](https://github.com/user-attachments/assets/45868e2b-58df-49db-9185-147e5af6fca6)
+(low framerate due to GIF)
 
 Completed:
 * Coded and vectorized a air hockey simulation which runs based on a transfer function of the real world table dynamics (relating motor voltages to position) generated though collecting real world data. The simulation works by using numerical methods to solve equations of intersection between the puck and the mallet, as well as the puck and the wall.

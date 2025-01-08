@@ -24,6 +24,7 @@ surface = np.array([screen_width / plr, screen_height / plr])
 white = (255, 255, 255)
 black = (0, 0, 0)
 red = (255, 0, 0)
+green = (0, 100, 0)
 blue = (0,0,255)
 
 # Set up the display
@@ -1610,7 +1611,7 @@ def check_goal():
 
     return np.where(entered_right_goal_mask, 1.0, np.where(entered_left_goal_mask, -1.0, 0.0))
 
-def display_state(index):
+def display_state(index, puck_pos_noM=None):
     screen.fill(white)
 
     positionA1 = [mallet_pos[index,0,0] * plr, mallet_pos[index,0,1] * plr]
@@ -1624,6 +1625,9 @@ def display_state(index):
     pygame.draw.rect(screen, red, pygame.Rect(0, screen_height/2-goal_width*plr/2, 5, goal_width*plr))
     pygame.draw.rect(screen, red, pygame.Rect(screen_width-5, screen_height/2-goal_width*plr/2, 5, goal_width*plr))
     pygame.draw.circle(screen, blue, (int(round(puck_pos[index,0]*plr)), int(round(puck_pos[index,1]*plr))), puck_radius*plr)
+
+    if not puck_pos_noM is None:
+        pygame.draw.circle(screen, green, (int(round(puck_pos_noM[0]*plr)), int(round(puck_pos_noM[1]*plr))), puck_radius*plr)
 
     pygame.display.flip()
 

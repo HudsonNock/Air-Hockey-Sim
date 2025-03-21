@@ -282,7 +282,7 @@ if True:
 
             next_obs_np = np.empty((2*envs, obs_dim))
             next_obs_np[:envs,:] = np.concatenate([mallet_pos[:,0,:], mallet_pos[:,1,:], puck_pos, mallet_vel[:,0,:], mallet_vel[:,1,:], puck_vel, puck_pos_noM, puck_vel_noM, attack[:envs].reshape(-1, 1)], axis=1) #(game, 12)
-            next_obs_np[envs:,:] = np.concatenate([bounds - mallet_pos[:,1,:], bounds - mallet_pos[:,0,:], bounds - puck_pos, -mallet_vel[:,0,:], -mallet_vel[:,1,:], -puck_vel, bounds - puck_pos_noM, -puck_vel_noM, attack[envs:].reshape(-1,1)], axis=1)
+            next_obs_np[envs:,:] = np.concatenate([bounds - mallet_pos[:,1,:], bounds - mallet_pos[:,0,:], bounds - puck_pos, -mallet_vel[:,1,:], -mallet_vel[:,0,:], -puck_vel, bounds - puck_pos_noM, -puck_vel_noM, attack[envs:].reshape(-1,1)], axis=1)
 
             rewards = torch.tensor(rewards, dtype=torch.float32)  # Rewards
             next_obs = torch.tensor(next_obs_np, dtype=torch.float32)  # Next observations

@@ -126,9 +126,9 @@ def initalize(envs, mallet_r=0.05, puck_r=0.05, goal_w=0.35, V_max=24):
     b3 = 0
 
     #(game, player, x/y)
-    C5 = np.full((game_number,2,2), [a1+b1,a1-b1])
-    C6 = np.full((game_number, 2, 2), [a22+b2, a22-b2])
-    C7 = np.full((game_number, 2, 2), [a3+b3,a3-b3])
+    C5 = np.full((game_number,2,2), [a1-b1,a1+b1])
+    C6 = np.full((game_number, 2, 2), [a22-b2, a22+b2])
+    C7 = np.full((game_number, 2, 2), [a3-b3,a3+b3])
 
     A = np.sqrt(np.square(C6) - 4 * C5 * C7)
     B = 2 * np.square(C7) * A

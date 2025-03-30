@@ -12,8 +12,9 @@
 #define DUTY_CYCLE_CONVERSION 1024 // Accepted duty cycle values are 0-1024
 #define PWM_FREQ_HZ 10000
 #define ROLLOVER_ANGLE_DEGS 180
-#define PULLEY_RADIUS 0.035306 //meters
-#define MALLET_RADIUS 0.08 // change later
+#define PULLEY_RADIUS 0.035306 //meters 
+#define MALLET_RADIUS 0.101553/2
+#define SERIAL_RX_BUFFER_SIZE 256
 
 using namespace std;
 
@@ -84,6 +85,8 @@ void home_table();
 void setup_mode();
 void send_motor_pos();
 bool update_goal();
+
+int counter = 0;
 
 void setup() {
   Serial.begin(115200);
@@ -218,11 +221,11 @@ void send_motor_pos() {
     (dt_angle[0] * pp_xy_pos[0] - dt_sum * p_xy_pos[0] + dt_angle[1]*xy_pos[0])*2/(dt_angle[0]*dt_angle[1]*dt_sum)};
 
   String jsonString = "{\"pos\":[";
-  jsonString += String(xy_pos[0], 6) + "," + String(xy_pos[1], 6);
+  jsonString += String(xy_pos[0], 4) + "," + String(xy_pos[1], 4);
   jsonString += "],\"vel\":[";
-  jsonString += String(xy_vel[0], 6) + "," + String(xy_vel[1], 6);
+  jsonString += String(xy_vel[0], 4) + "," + String(xy_vel[1], 4);
   jsonString += "],\"acc\":[";
-  jsonString += String(xy_acc[0], 6) + "," + String(xy_acc[1], 6);
+  jsonString += String(xy_acc[0], 4) + "," + String(xy_acc[1], 4);
   jsonString += "]}";
   
   Serial.println(jsonString);
@@ -230,13 +233,18 @@ void send_motor_pos() {
 
 void loop() {
   if (mode == 1) {
-    String jsonString = Serial.readStringUntil('\n');
+    if (counter == 100) {
+      counter = 0;
+      String jsonString = Serial.readStringUntil('\n');
       
-    if (jsonString.length() > 0) {
-      set_motor_pwms(0,0);
-      setup_mode();
+      if (jsonString.length() > 0) {
+        set_motor_pwms(0,0);
+        setup_mode();
+      }
     }
 
+    counter += 1;
+    
     read_motor_angles();
   }
   else {

@@ -76,7 +76,7 @@ policy_module = ProbabilisticActor(
     distribution_class=TanhNormal,
     distribution_kwargs={
         "low": torch.tensor([mallet_r, mallet_r, 0.3, 0.3]),
-        "high": torch.tensor([xbound/2-mallet_r, ybound - mallet_r, 10, 10]),
+        "high": torch.tensor([xbound/2-mallet_r, ybound - mallet_r, 5, 5]),
     },
     default_interaction_type=tensordict.nn.InteractionType.RANDOM,
     return_log_prob=True,
@@ -103,8 +103,8 @@ value_module = ValueOperator(
     out_keys=["state_value"]
 )
 
-policy_module.load_state_dict(torch.load("policy_weights8.pth"))
-value_module.load_state_dict(torch.load("value_weights8.pth"))
+policy_module.load_state_dict(torch.load("policy_weights15.pth")) #8
+value_module.load_state_dict(torch.load("value_weights15.pth"))
 
 advantage_module = GAE(
     gamma=0.99, lmbda=0.5, value_network=value_module
@@ -113,9 +113,9 @@ advantage_module = GAE(
 loss_module = ClipPPOLoss(
     actor_network=policy_module,
     critic_network=value_module,
-    clip_epsilon=0.01, #0.02
+    clip_epsilon=0.03, #0.01
     entropy_bonus=True, 
-    entropy_coef=0.00024 # 0.0003
+    entropy_coef=0.0003, #0.00024,
     )
 
 optim = torch.optim.Adam(loss_module.parameters(), lr=3e-4) #3e-4
@@ -131,6 +131,12 @@ attack[:envs] = True
 obs[:envs, :] = np.concatenate([mallet_init[0], mallet_init[1], puck_init[0], np.zeros((6,)), puck_init[0], np.zeros((2,)), np.array([1.0])])
 obs[envs:, :] = np.concatenate([mallet_init[0], mallet_init[1], puck_init[1], np.zeros((6,)), puck_init[1], np.zeros((3,))])
 obs = TensorDict({"observation": torch.tensor(obs, dtype=torch.float32)})
+
+past_obs = np.empty((2*envs, obs_dim))
+past_obs[:envs, :] = np.concatenate([mallet_init[0], mallet_init[1], puck_init[0], np.zeros((6,)), puck_init[0], np.zeros((2,)), np.array([1.0])])
+past_obs[envs:, :] = np.concatenate([mallet_init[0], mallet_init[1], puck_init[1], np.zeros((6,)), puck_init[1], np.zeros((3,))])
+past_obs = TensorDict({"observation": torch.tensor(past_obs, dtype=torch.float32)})
+
 batch_size = 1024
 
 left_puck = np.full((envs), True)
@@ -152,7 +158,7 @@ if True:
         print("simulating...")
         for timestep in range(50):
             # Example: Simulated batch from your environment
-            policy_out = policy_module(obs)
+            policy_out = policy_module(past_obs)
             #policy_out1 = policy_module(TensorDict({"observation": obs["observation"][envs:]}))
             #policy_out2 = policy_module2(TensorDict({"observation": obs["observation"][:envs]}))
             actions = policy_out["action"].detach()
@@ -264,9 +270,9 @@ if True:
 
             vel_norm = np.linalg.norm(puck_vel, axis=1)
 
-            stabalized_l = ~attack_copy[:envs] & left_puck & (vel_norm > 0.7) & (np.abs(puck_vel[:,1])/np.maximum(np.abs(puck_vel[:,0]), 0.001) > 7) & (np.abs(puck_pos[:,0] - 0.65) < 0.3)
+            stabalized_l = ~attack_copy[:envs] & left_puck & (vel_norm > 0.3) & (np.abs(puck_vel[:,1])/np.maximum(np.abs(puck_vel[:,0]), 0.001) > 2) & (np.abs(puck_pos[:,0] - 0.65) < 0.3)
             stabalized_l = stabalized_l & np.random.choice([False, True], size=envs, p=[0.3, 0.7])
-            stabalized_r = ~attack_copy[envs:] & ~left_puck & (vel_norm > 0.7) & (np.abs(puck_vel[:,1])/np.maximum(np.abs(puck_vel[:,0]), 0.001) > 7) & (np.abs(puck_pos[:,0] - 1.35) < 0.3)
+            stabalized_r = ~attack_copy[envs:] & ~left_puck & (vel_norm > 0.3) & (np.abs(puck_vel[:,1])/np.maximum(np.abs(puck_vel[:,0]), 0.001) > 2) & (np.abs(puck_pos[:,0] - 1.35) < 0.3)
             stabalized_r = stabalized_r & np.random.choice([False, True], size=envs, p=[0.3, 0.7])
             stabalized = np.concatenate([stabalized_l, stabalized_r])
 
@@ -284,25 +290,39 @@ if True:
             next_obs_np[:envs,:] = np.concatenate([mallet_pos[:,0,:], mallet_pos[:,1,:], puck_pos, mallet_vel[:,0,:], mallet_vel[:,1,:], puck_vel, puck_pos_noM, puck_vel_noM, attack[:envs].reshape(-1, 1)], axis=1) #(game, 12)
             next_obs_np[envs:,:] = np.concatenate([bounds - mallet_pos[:,1,:], bounds - mallet_pos[:,0,:], bounds - puck_pos, -mallet_vel[:,1,:], -mallet_vel[:,0,:], -puck_vel, bounds - puck_pos_noM, -puck_vel_noM, attack[envs:].reshape(-1,1)], axis=1)
 
+            pos_range = (-0.02, 0.02)  # Range for position (x and y)
+            vel_range = (-0.06, 0.06)  # Range for velocity
+
+            # Create random perturbations for position and velocity
+            pos_perturb = np.random.uniform(pos_range[0], pos_range[1], next_obs_np[:, :2].shape)
+            vel_perturb = np.random.uniform(vel_range[0], vel_range[1], next_obs_np[:, 2:4].shape)
+
+            # Add the random perturbations to positions and velocities
+            next_obs_np[:envs, :2] += pos_perturb[:envs]
+            next_obs_np[:envs, 2:4] += vel_perturb[:envs]
+            next_obs_np[envs:, :2] += pos_perturb[envs:]
+            next_obs_np[envs:, 2:4] += vel_perturb[envs:]
+
             rewards = torch.tensor(rewards, dtype=torch.float32)  # Rewards
             next_obs = torch.tensor(next_obs_np, dtype=torch.float32)  # Next observations
             terminated = torch.tensor(dones)
             dones = torch.tensor(dones) # Done flags (0 or 1)
 
             replay_buffer.extend(TensorDict({
-                    "observation": obs["observation"],
+                    "observation": past_obs["observation"],
                     "action": actions,
                     "reward": rewards,
                     "done": dones,
-                    "next_observation": next_obs,
+                    "next_observation": obs["observation"],
                     "terminated": terminated,
                     "sample_log_prob": log_prob
                 }, batch_size=[actions.shape[0]]))
 
+            past_obs = obs
             obs = TensorDict({"observation": next_obs})
 
         print("training...")
-        for _ in range(150):
+        for _ in range(350):
             sample = replay_buffer.sample(batch_size)
 
             tensordict_data = TensorDict({
@@ -383,8 +403,8 @@ if True:
             optim.step()
             
 
-        torch.save(policy_module.state_dict(), "policy_weights9.pth")
-        torch.save(value_module.state_dict(), "value_weights9.pth")
+        torch.save(policy_module.state_dict(), "policy_weights16.pth")
+        torch.save(value_module.state_dict(), "value_weights16.pth")
         print((update+1) / 100)
 
     print("Done Training")
@@ -395,10 +415,14 @@ envs = 1
 N = 35
 step_size = Ts/N
 obs = np.empty((2, obs_dim))
+past_obs = np.empty((2,obs_dim))
 attack = np.array([True, False])
 obs[:1, :] = np.concatenate([mallet_init[0], mallet_init[1], puck_init[0], np.zeros((6,)), puck_init[0], np.zeros((2,)), np.array([1.0])])
 obs[1:, :] = np.concatenate([mallet_init[0], mallet_init[1], puck_init[1], np.zeros((6,)), puck_init[1], np.zeros((3,))])
+past_obs[:1, :] = np.concatenate([mallet_init[0], mallet_init[1], puck_init[0], np.zeros((6,)), puck_init[0], np.zeros((2,)), np.array([1.0])])
+past_obs[1:, :] = np.concatenate([mallet_init[0], mallet_init[1], puck_init[1], np.zeros((6,)), puck_init[1], np.zeros((3,))])
 obs = TensorDict({"observation": torch.tensor(obs, dtype=torch.float32)}, batch_size = 2)
+past_obs = TensorDict({"observation": torch.tensor(past_obs, dtype=torch.float32)}, batch_size = 2)
 mallet_pos = np.tile(mallet_init, (1,1,1))
 start_cnt = 0
 theta = 0
@@ -411,7 +435,7 @@ while True:
     #actions = torch.concatenate([policy_out2["action"].detach(), policy_out1["action"].detach()])
     #actions_np = actions.numpy()
 
-    policy_out = policy_module(obs)
+    policy_out = policy_module(past_obs)
     actions_np = policy_out["action"].detach().numpy()
 
     values = value_module(obs)["state_value"].detach().numpy()
@@ -535,10 +559,10 @@ while True:
 
     vel_norm = np.linalg.norm(puck_vel, axis=1)
 
-    stabalized_l = ~attack_copy[:envs] & left_puck & (vel_norm > 0.7) & (np.abs(puck_vel[:,1])/np.maximum(np.abs(puck_vel[:,0]), 0.001) > 7) & (np.abs(puck_pos[:,0] - 0.65) < 0.3)
-    stabalized_l = stabalized_l & np.random.choice([False, True], size=envs, p=[0.3, 0.7])
-    stabalized_r = ~attack_copy[envs:] & ~left_puck & (vel_norm > 0.7) & (np.abs(puck_vel[:,1])/np.maximum(np.abs(puck_vel[:,0]), 0.001) > 7) & (np.abs(puck_pos[:,0] - 1.35) < 0.3)
-    stabalized_r = stabalized_r & np.random.choice([False, True], size=envs, p=[0.3, 0.7])
+    stabalized_l = ~attack_copy[:envs] & left_puck & (vel_norm > 0.3) & (np.abs(puck_vel[:,1])/np.maximum(np.abs(puck_vel[:,0]), 0.001) > 2) & (np.abs(puck_pos[:,0] - 0.65) < 0.3)
+    #stabalized_l = stabalized_l & np.random.choice([False, True], size=envs, p=[0.3, 0.7])
+    stabalized_r = ~attack_copy[envs:] & ~left_puck & (vel_norm > 0.3) & (np.abs(puck_vel[:,1])/np.maximum(np.abs(puck_vel[:,0]), 0.001) > 2) & (np.abs(puck_pos[:,0] - 1.35) < 0.3)
+    #stabalized_r = stabalized_r & np.random.choice([False, True], size=envs, p=[0.3, 0.7])
     stabalized = np.concatenate([stabalized_l, stabalized_r])
 
     dones[stabalized] = True
@@ -563,6 +587,20 @@ while True:
     #puck_pos += np.array([np.random.uniform(-0.004, 0.004), np.random.uniform(-0.004, 0.004)])
     next_obs[envs:,:] = np.concatenate([bounds - mallet_pos[:,1,:], bounds - mallet_pos[:,0,:], bounds - puck_pos, -mallet_vel[:,0,:], -mallet_vel[:,1,:], -puck_vel, bounds - puck_pos_noM, -puck_vel_noM, attack[envs:].reshape(-1,1)], axis=1)
 
+    pos_range = (-0.02, 0.02)  # Range for position (x and y)
+    vel_range = (-0.05, 0.05)  # Range for velocity
+
+    # Create random perturbations for position and velocity
+    pos_perturb = np.random.uniform(pos_range[0], pos_range[1], next_obs[:, :2].shape)
+    vel_perturb = np.random.uniform(vel_range[0], vel_range[1], next_obs[:, 2:4].shape)
+
+    # Add the random perturbations to positions and velocities
+    next_obs[:envs, :2] += pos_perturb[:envs]
+    next_obs[:envs, 2:4] += vel_perturb[:envs]
+    next_obs[envs:, :2] += pos_perturb[envs:]
+    next_obs[envs:, 2:4] += vel_perturb[envs:]
+
+    past_obs = obs
     obs = TensorDict({"observation": torch.tensor(next_obs, dtype=torch.float32)}, batch_size=2)
 
     #TODO

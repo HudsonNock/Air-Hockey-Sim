@@ -102,7 +102,7 @@ def initalize(envs, mallet_r=0.05, puck_r=0.05, goal_w=0.35, V_max=24):
     drag = np.full((game_number), 0.0014273)
     friction = np.full((game_number), 0.00123794)
     res = np.full((game_number), 0.7)
-    res_mallet = np.full((game_number), 0.9)
+    res_mallet = np.full((game_number), 0.6)
     mass = np.full((game_number), 0.00776196)
                 
     global C5
@@ -1563,7 +1563,9 @@ def impulse(epsilon=0.01, theta = 0):
     random_vector = np.array([radius * np.cos(angle), radius*np.sin(angle)])
     random_vectors = np.tile(random_vector, (n,1))
 
-    puck_vel += random_vectors #+ offset * puck_vel / np.maximum(np.linalg.norm(puck_vel, axis=1), 0.001)[:,None]
+    #puck_vel += random_vectors #+ offset * puck_vel / np.maximum(np.linalg.norm(puck_vel, axis=1), 0.001)[:,None]
+    puck_vel[:,0] += np.where(puck_pos[:,0] < 0.7, 0.02, -0.02)
+    puck_vel[:,1] += np.where(puck_pos[:,1] < 0.5, 0.02, -0.02)
 
 def step_noM(t, puck_pos_noM = None, puck_vel_noM = None, recurr_mask=None, x_mc = None):
     

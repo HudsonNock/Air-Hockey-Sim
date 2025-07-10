@@ -22,11 +22,9 @@ class CircularCameraBuffer():
         self.array[self.head:self.head+4] = arr
 
     def get(self):
-        self.get_arr[:4] = self.array[self.head:self.head+4]
-        self.get_arr[4:8] = self.array[(self.head+4)%self.buffer_size:(self.head+8)%self.buffer_size]
-        self.get_arr[8:12] = self.array[(self.head+8)%self.buffer_size:(self.head+12)%self.buffer_size]
-        self.get_arr[12:16] = self.array[(self.head+20)%self.buffer_size:(self.head+24)%self.buffer_size]
-        self.get_arr[16:] = self.array[(self.head+44)%self.buffer_size:(self.head+48)%self.buffer_size]
+        offsets = np.array([0, 4, 8, 20, 44])
+        all_indices = (self.head + offsets[:, None] + np.arange(4)) % self.buffer_size
+        self.get_arr[:] = np.take(self.array, all_indices).reshape(-1)
         return self.get_arr
 
 class SetupCamera:

@@ -10,6 +10,25 @@ import json
 
 import extrinsic
 
+class CircularCameraBuffer():
+    def __init__(self):
+        self.array = np.empty((12*4,))
+        self.get_arr = np.empty((5*4,))
+        self.buffer_size = 12*4
+        self.head = 0
+
+    def put(self,arr):
+        self.head = (self.head - 4) % self.buffer_size
+        self.array[self.head:self.head+4] = arr
+
+    def get(self):
+        self.get_arr[:4] = self.array[self.head:self.head+4]
+        self.get_arr[4:8] = self.array[(self.head+4)%self.buffer_size:(self.head+8)%self.buffer_size]
+        self.get_arr[8:12] = self.array[(self.head+8)%self.buffer_size:(self.head+12)%self.buffer_size]
+        self.get_arr[12:16] = self.array[(self.head+20)%self.buffer_size:(self.head+24)%self.buffer_size]
+        self.get_arr[16:] = self.array[(self.head+44)%self.buffer_size:(self.head+48)%self.buffer_size]
+        return self.get_arr
+
 class SetupCamera:
     def __init__(self):
 
@@ -54,6 +73,8 @@ class SetupCamera:
         img_shape = (2048, 1536)
         self.z_pixel_map = np.full((img_shape[0] // 8, img_shape[1] // 8), self.z_params[0], dtype=np.float32)
 
+        self.x_offset = 376
+
     def get_puck_pixel(self, frame):
         mask = cv2.inRange(frame, 150, 255)
 
@@ -65,13 +86,13 @@ class SetupCamera:
         contour = contours[0]
         M = cv2.moments(contour)
         if len(contour) > 10 and M['m00'] != 0:
-            img_pos = np.array([M['m10'] / M['m00'], M['m01'] / M['m00']])
+            img_pos = np.array([M['m10'] / M['m00'] + self.x_offset, M['m01'] / M['m00']])
             return img_pos
     
     def run_extrinsics(self, frame):
         self.aruco_3d_points = np.load("aruco_3d_points.npy")
         self.z_params_world = np.load("z_params.npy")
-        rvec, tvec = extrinsic.calibrate_extrinsic(frame, self.aruco_3d_points, self.intrinsic_matrix, self.distortion_coeffs)
+        rvec, tvec = extrinsic.calibrate_extrinsic(frame, self.aruco_3d_points, self.intrinsic_matrix, self.distortion_coeffs, self.x_offset)
         if rvec is not None and tvec is not None:
             self.rotation_matrix = cv2.Rodrigues(rvec)[0]
             self.translation_vector = tvec
@@ -132,6 +153,9 @@ class CameraTracker:
         self.past_op_mallet_pos = np.array([0.3, 0.5])
         self.past_past_puck_pos = np.array([1.7, 0.5])
 
+        self.past_data = CircularCameraBuffer()
+        self.x_offset = 376
+
     def track(self, frame):
         mask = cv2.inRange(frame, 150, 255)
 
@@ -146,12 +170,13 @@ class CameraTracker:
 
         for i, contour in enumerate(contours):
             if hierarchy[i][2] == -1 and len(contour) > 20:
+                contour[:,0,0] += self.x_offset
                 M = cv2.moments(contour)
                 if M['m00'] != 0:
                     img_pos = np.array([M['m10'] / M['m00'], M['m01'] / M['m00']])
                     img_pos_int = tuple(map(int, img_pos))
 
-                    if mask[img_pos_int[1], img_pos_int[0]] == 0 and mallet_pos is None:
+                    if mask[img_pos_int[1], img_pos_int[0] - self.x_offset] == 0 and mallet_pos is None:
                         mallet_pos = extrinsic.global_coordinate_zpixel(img_pos,
                                 self.rotation_matrix,
                                 self.translation_vector,
@@ -159,7 +184,7 @@ class CameraTracker:
                                 self.distortion_coeffs,
                                 self.op_mallet_z,
                                 self.z_pixel_map)[0:2]
-                    elif mask[img_pos_int[1], img_pos_int[0]] == 255 and puck_pos is None:
+                    elif mask[img_pos_int[1], img_pos_int[0] - self.x_offset] == 255 and puck_pos is None:
                         points_3D = extrinsic.global_coordinate_vectorized_zpixel(np.vstack((contour.squeeze(axis=1), img_pos)),\
                                 self.rotation_matrix,\
                                 self.translation_vector,\
@@ -219,11 +244,15 @@ class CameraTracker:
         self.past_past_puck_pos = self.past_puck_pos
         self.past_puck_pos = puck_pos
 
+        self.past_data.put(np.concatenate([puck_pos, opponent_mallet_pos], axis=0))
+
         return puck_pos, opponent_mallet_pos
 
 if __name__ == "__main__":
     track = SetupCamera()
-    img = cv2.imread("jump_bright.bmp", cv2.IMREAD_GRAYSCALE)
+    img = cv2.imread("jump_bright.bmp", cv2.IMREAD_GRAYSCALE)[:,376:376+1296]
+    #cv2.imshow("test", img)
+    #cv2.waitKey(0)
     track.run_extrinsics(img)
 
     track = CameraTracker(track.rotation_matrix,
@@ -231,6 +260,6 @@ if __name__ == "__main__":
                           track.z_pixel_map,
                           (120.94)*10**(-3))
 
-    img = cv2.imread("jump.bmp", cv2.IMREAD_GRAYSCALE)
-    track.process_frame(img)
-
+    img = cv2.imread("jump.bmp", cv2.IMREAD_GRAYSCALE)[:,376:376+1296]
+    while True:
+        track.process_frame(img)

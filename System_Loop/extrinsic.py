@@ -4,7 +4,7 @@ import matplotlib.pyplot as plt
 from scipy.optimize import minimize
 from scipy.optimize import least_squares
 
-def detect_aruco_markers(gray):
+def detect_aruco_markers(gray, x_offset):
     # Load the image
     
     # Load the predefined ArUco dictionary
@@ -22,6 +22,7 @@ def detect_aruco_markers(gray):
         top_right_corners = {}
         for i, marker_id in enumerate(ids.flatten()):
             # Extract top-right corner (third corner in OpenCV ArUco order)
+            corners[i][0][1][0] += x_offset
             top_right = tuple(corners[i][0][1].astype(int))
             top_right_corners[marker_id] = top_right
         
@@ -245,8 +246,8 @@ def z_height_vectorized(z_param, p):
     return z_param[0] + z_param[1] * p[:,0] + z_param[2] * p[:,1] +\
             z_param[3] * p[:,0] * p[:,1] + z_param[4] * p[:,0]**2 + z_param[5] * p[:,1]**2
 
-def calibrate_extrinsic(img: np.ndarray, aruco_3d_points, intrinsic_matrix, dist_coeffs):
-    top_right_corners = detect_aruco_markers(img)
+def calibrate_extrinsic(img: np.ndarray, aruco_3d_points, intrinsic_matrix, dist_coeffs, x_offset):
+    top_right_corners = detect_aruco_markers(img, x_offset)
 
     if len(top_right_corners) != 6:
         return None, None

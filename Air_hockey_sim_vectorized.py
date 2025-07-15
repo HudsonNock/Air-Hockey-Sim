@@ -1,4 +1,3 @@
-import pygame
 import math
 from scipy.optimize import fsolve, newton, brentq
 from scipy.special import lambertw
@@ -8,10 +7,9 @@ from shapely.geometry import Polygon, LineString
 from itertools import product
 from chandrupatla import chandrupatla
 import time as tme
+import cv2
 
 # Initialize pygame
-pygame.init()
-clock = pygame.time.Clock()
 print("STARTING")
 
 width = 1.9885
@@ -31,12 +29,7 @@ red = (255, 0, 0)
 green = (0, 100, 0)
 blue = (0,0,255)
 
-# Set up the display
-screen = pygame.display.set_mode((screen_width, screen_height))
-pygame.display.set_caption("Air Hockey")
-
-
-def initalize(envs, mallet_r=0.05, puck_r=0.05, goal_w=0.35, V_max=24, pully_radius=0.035306, coll_vars=None, ab_vars=None):
+def initalize(envs, mallet_r=0.05, puck_r=0.05, goal_w=0.35, V_max=24, pully_radius=0.035306, coll_vars=None, ab_vars=None, puck_inits=None):
     global game_number 
     global time
     global mallet_radius
@@ -48,6 +41,7 @@ def initalize(envs, mallet_r=0.05, puck_r=0.05, goal_w=0.35, V_max=24, pully_rad
     global puck_pos
     global puck_vel
     global mallet_pos
+    global mallet_vel
     global x_0
     global x_p
     global x_pp
@@ -59,6 +53,7 @@ def initalize(envs, mallet_r=0.05, puck_r=0.05, goal_w=0.35, V_max=24, pully_rad
     global friction
     global mass
     global res
+    global puck_init
 
     time = 0
 
@@ -73,14 +68,14 @@ def initalize(envs, mallet_r=0.05, puck_r=0.05, goal_w=0.35, V_max=24, pully_rad
     Vmin = np.zeros((game_number,2,2), dtype="float32")
     pullyR = pully_radius
 
-    puck_pos = np.empty((game_number, 2), dtype="float32")
-    puck_pos[:,0] = 0.5
-    puck_pos[:,1] = 0.5
+    puck_pos = puck_inits.copy()
     puck_vel = np.full((game_number, 2), 0, dtype="float32")
+    puck_init = puck_inits
     #puck_vel[:,0] = 1.359155
     #puck_vel[:,1] = 0.98599756
 
     mallet_pos = np.empty((game_number,2,2), dtype="float32")
+    mallet_vel = np.empty((game_number,2,2), dtype="float32")
 
     x_0 = np.empty((game_number,2,2), dtype="float32")
     x_0[:,0,:] = [0.25, 0.5]
@@ -103,9 +98,9 @@ def initalize(envs, mallet_r=0.05, puck_r=0.05, goal_w=0.35, V_max=24, pully_rad
     bounds_puck = np.array([[puck_radius, width - puck_radius], [puck_radius, height - puck_radius]])
     bounds_puck = np.tile(np.expand_dims(bounds_puck, axis=0), (game_number,1,1))
                     
-    drag = np.full((game_number), 0.0014273)
-    friction = np.full((game_number), 0.00123794)
-    mass = np.full((game_number), 0.00776196)
+    drag = 0.0012273 + np.random.random((game_number,))*0.0004
+    friction = 0.00103794 + np.random.random((game_number,))*0.0004
+    mass = 0.00736196 + np.random.random((game_number,)) * 0.0008
     res = coll_vars
                 
     global C5
@@ -938,7 +933,7 @@ def update_puck(t, mask, t_init, no_M = False, noM_pos = None, noM_vel = None, i
             else:
                 noM_pos, _, hitM = step_noM(1.0, center_pos, center_vel, np.where(mask)[0][crossed_to_left].astype(np.int32), x_mc)
             entered_goal = noM_pos[:,0] < 0
-            cross_left[crossed_to_left] = np.where(entered_goal, np.where(hitM, np.sum(center_vel**2, axis=1), 5*np.sum(center_vel**2, axis=1)), -0.5)
+            cross_left[crossed_to_left] = np.where(entered_goal, np.where(hitM, -0.5, np.sum(center_vel**2, axis=1)), -0.5)
 
         if np.any(crossed_to_right):
             dist = np.sqrt(np.sum((pos[crossed_to_right] - new_pos[crossed_to_right])**2, axis=1)) * (pos[crossed_to_right,0] - (surface[0]/2+puck_radius)) / (pos[crossed_to_right,0] - new_pos[crossed_to_right,0])
@@ -979,7 +974,7 @@ def update_puck(t, mask, t_init, no_M = False, noM_pos = None, noM_vel = None, i
             else:
                 noM_pos, _, hitM = step_noM(1.0, center_pos, center_vel, np.where(mask)[0][crossed_to_right].astype(np.int32), x_mc)
             entered_goal = noM_pos[:,0] > surface[0]
-            cross_right[crossed_to_right] = np.where(entered_goal, np.where(hitM, np.sum(center_vel**2, axis=1), 5*np.sum(center_vel**2, axis=1)), -0.5)
+            cross_right[crossed_to_right] = np.where(entered_goal, np.where(hitM, -0.5, np.sum(center_vel**2, axis=1)), -0.5)
 
         return new_pos, new_vel, recurr_time_m, recurr_mask_m, cross_left, cross_right
 
@@ -1533,6 +1528,7 @@ def step(t):
     global time
     global puck_pos
     global mallet_pos
+    global mallet_vel
     recurr_mask = np.full((game_number), True)
     recurr_mask[reset_mask] = False
     recurr_time = np.full((game_number), t, dtype="float32")
@@ -1578,8 +1574,9 @@ def step(t):
         #print("---")
     time += t
     mallet_pos[np.logical_not(reset_mask)] = get_pos(np.full((game_number), time))[np.logical_not(reset_mask)]
+    mallet_vel[np.logical_not(reset_mask)] = get_xp(np.full((game_number),time))[np.logical_not(reset_mask)]
 
-    return mallet_pos, puck_pos, cross_left, cross_right #mallet_hit, puck_wall_collision
+    return mallet_pos, mallet_vel, puck_pos, cross_left, cross_right #mallet_hit, puck_wall_collision
 
 def impulse(epsilon=0.01, theta = 0):
     global puck_vel
@@ -1639,6 +1636,12 @@ def take_action(x_f, Vo):
     reset_mask = np.full((game_number), False)
     time = 0
 
+def get_xf0():
+    return C2 * A2CE[:,:,:,2]
+
+def get_a():
+    return a
+
 def check_state():
     global reset_mask
     #[n, index]
@@ -1691,14 +1694,10 @@ def check_state():
         
 def check_goal():
     global reset_mask
-    global mallet_pos
-    global x_0
-    global x_p
-    global x_pp
-    entered_left_goal_mask = puck_pos[:,0] < 0
-    entered_right_goal_mask = puck_pos[:,0] > surface[0]
+    entered_left_goal_mask = np.logical_and(puck_pos[:,0] < 0, np.logical_not(reset_mask))
+    entered_right_goal_mask = np.logical_and(puck_pos[:,0] > surface[0], np.logical_not(reset_mask))
 
-    entered_goal = (entered_left_goal_mask | entered_right_goal_mask) & np.logical_not(reset_mask)
+    entered_goal = (entered_left_goal_mask | entered_right_goal_mask)
 
     if np.any(entered_goal):
         reset_mask = reset_mask | entered_goal
@@ -1719,6 +1718,7 @@ def check_goal():
 
     return entered_left_goal_mask, entered_right_goal_mask
 
+"""
 def display_state(index, puck_pos_noM=None):
     screen.fill(white)
 
@@ -1738,6 +1738,50 @@ def display_state(index, puck_pos_noM=None):
         pygame.draw.circle(screen, green, (int(round(puck_pos_noM[0]*plr)), int(round(puck_pos_noM[1]*plr))), puck_radius*plr)
 
     pygame.display.flip()
+"""
+
+def display_state(index, puck_pos_noM=None):
+    # Create a blank white image
+    img = np.ones((screen_height, screen_width, 3), dtype=np.uint8) * 255
+
+    # Convert to int drawing coordinates
+    def to_int_coords(pos):
+        return (int(round(pos[0])), int(round(pos[1])))
+
+    # Draw center line
+    cv2.rectangle(img, 
+                  (int(screen_width/2 - 5), 0), 
+                  (int(screen_width/2 + 5), screen_height), 
+                  (0, 0, 255), -1)  # red in BGR
+
+    # Draw mallets
+    positionA1 = [mallet_pos[index,0,0] * plr, mallet_pos[index,0,1] * plr]
+    positionA2 = [mallet_pos[index,1,0] * plr, mallet_pos[index,1,1] * plr]
+    cv2.circle(img, to_int_coords(positionA1), int(mallet_radius*plr), (0, 0, 0), -1)
+    cv2.circle(img, to_int_coords(positionA2), int(mallet_radius*plr), (0, 0, 0), -1)
+
+    # Draw targets
+    cv2.circle(img, to_int_coords([x_f[index,0,0]*plr, x_f[index,0,1]*plr]), 5, (0, 0, 255), -1)
+    cv2.circle(img, to_int_coords([x_f[index,1,0]*plr, x_f[index,1,1]*plr]), 5, (0, 0, 255), -1)
+
+    # Draw goals
+    gw = int(goal_width * plr)
+    cv2.rectangle(img, (0, screen_height//2 - gw//2), (5, screen_height//2 + gw//2), (0, 0, 255), -1)
+    cv2.rectangle(img, (screen_width - 5, screen_height//2 - gw//2), (screen_width, screen_height//2 + gw//2), (0, 0, 255), -1)
+
+    # Draw puck
+    puck_pos_scaled = [puck_pos[index,0] * plr, puck_pos[index,1] * plr]
+    cv2.circle(img, to_int_coords(puck_pos_scaled), int(puck_radius * plr), (255, 0, 0), -1)  # blue in BGR
+
+    # Draw puck without mallet if provided
+    if puck_pos_noM is not None:
+        puck_pos_noM_scaled = [puck_pos_noM[0] * plr, puck_pos_noM[1] * plr]
+        cv2.circle(img, to_int_coords(puck_pos_noM_scaled), int(puck_radius * plr), (0, 255, 0), -1)
+
+    # Show the image
+    cv2.imshow('Air Hockey State', img)
+    cv2.waitKey(1)  # Add small delay so window updates
+
 
 def get_mallet_bounds():
     return bounds_mallet
@@ -1752,10 +1796,12 @@ def reset_sim(index = None, col_vars=None, ab_vars=None):#, left_scored= None):
     global x_pp
     global puck_vel
     global puck_pos
+    global mallet_vel
 
     reset_mask[index] = True
 
     mallet_pos[index,0,:] = np.array([0.25,0.5])
+    mallet_vel[index,:,:] = np.array([0.0, 0.0])
     x_0[index,0,:] = np.array([0.25,0.5])
 
     mallet_pos[index,1,:] = bounds - np.array([0.25,0.5])
@@ -1765,7 +1811,7 @@ def reset_sim(index = None, col_vars=None, ab_vars=None):#, left_scored= None):
     x_pp[index,:] = 0.0
 
     puck_vel[index,:] = np.array([0.0,0.0])
-    puck_pos[index,:] = np.array([0.5,0.5])
+    puck_pos[index,:] = puck_init[index,:]
 
     res[index,:] = col_vars
 

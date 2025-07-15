@@ -5,7 +5,7 @@ from torch.distributions import Categorical
 import numpy as np
 import Air_hockey_sim_vectorized as sim
 from torchrl.modules import ProbabilisticActor, TanhNormal, ValueOperator
-from torchrl.objectives import ClipPPOLoss
+from torchrl.objectives import ClipPPOLoss, SACLoss
 import tensordict
 from tensordict import TensorDict, TensorDictBase
 from tensordict.nn.distributions import NormalParamExtractor
@@ -15,13 +15,18 @@ from collections import deque
 from torchrl.data import TensorDictReplayBuffer, LazyTensorStorage
 import time
 from perlin_numpy import generate_perlin_noise_2d
+from torchrl.data.tensor_specs import BoundedTensorSpec, CompositeSpec
+import copy
 
-
+load_filepath = "checkpoints\\model_01.pth"
+save_filepath = "checkpoints\\model_01.pth"
+train = False
 # Simulation parameters
-obs_dim = 51 #[puck_pos, opp_mallet_pos] #guess mean low std
+obs_dim = 52 #[puck_pos, opp_mallet_pos] #guess mean low stdl
             #[mallet_pos, mallet_vel, past action, past mallet_pos]
             #[e_n0, e_nr, e_nf, e_t0, e_tr, e_tf, var] x2 mallet and wall,
             #[a1, a2, a3, b1, b2]
+            #[time]
 
 mallet_r = 0.05082
 puck_r = 0.5 * 0.0618
@@ -30,25 +35,31 @@ pullyR = 0.035306
 #col: n_f + (1-n_f/n_0) * 2/(1+e^(n_r x^2)) n_0
 
 action_dim = 4
-Vmax = 24
+Vmax = 24*0.8
 
 sensor_error = 0.0027 #mean of 1mm between [0-2.5 mm]
 
-#mean, var, min, max
-camera_to_laptop_delay = [0.03, 0.0003, 0.03-0.0004, 0.03+0.0004]
-image_and_inference_delay = [0.006, 0.0014, 0.0045, 0.009]
-serial_delay = [0.001, 0.0002, 0.0002, 0.0015]
+#mean, std, min, max
+image_delay = [15.166/1000, 0.3/1000, 14/1000, 16.5/1000]
+mallet_delay = [7.17/1000, 0.3/1000, 6.2/1000, 8.0/1000]
+camera_period = 1/120.0
 
-frame_interval = [0.0085, 0.0001, 0.0084, 0.0086]
-frames = [0, 1, 2, 4, 9]
+frames = [0, 1, 2, 5, 11]
 
 height = 1.9885
 width = 0.9905
 bounds = np.array([height, width])
 goal_width = 0.254
 
+entropy_coeff = 0.0002
+epsilon = 0.01
+gamma = 0.997
+lmbda = 0.6
+lr_optim = 3e-4
+batch_size = 1024
+
 class ScaledNormalParamExtractor(NormalParamExtractor):
-    def __init__(self, scale_factor=1.0):
+    def __init__(self, scale_factor=0.8):
         super().__init__()
         self.scale_factor = scale_factor
 
@@ -69,6 +80,10 @@ class ReplayBuffer:
         indices = torch.randint(0, len(self.buffer), (batch_size,))
         sampled_transitions = [self.buffer[i] for i in indices]
         return sampled_transitions
+    
+scale_factor = 0.4
+if not train:
+    scale_factor = 0.1
 
 policy_net = nn.Sequential(
     nn.Linear(obs_dim, 1024),
@@ -85,25 +100,89 @@ policy_net = nn.Sequential(
     nn.Linear(256, 128),
     nn.ReLU(),
     nn.Linear(128, action_dim * 2),
-    ScaledNormalParamExtractor(),
-).to('cuda')
+    ScaledNormalParamExtractor(scale_factor=scale_factor),
+)
 
 policy_module = TensorDictModule(
     policy_net, in_keys=["observation"], out_keys=["loc", "scale"]
-).to('cuda')
+)
 
 policy_module = ProbabilisticActor(
     module=policy_module,
     in_keys=["loc", "scale"],
     distribution_class=TanhNormal,
     distribution_kwargs={
-        "low": torch.tensor([mallet_r, mallet_r, 0.25, 0.25]),
-        "high": torch.tensor([bounds[0]/2-mallet_r, bounds[1] - mallet_r, 24, 24]),  #TODO Change this since Vx + Vy < 2*Vmax * 0.8
+        "low": torch.tensor([mallet_r, mallet_r, 0, -1]),
+        "high": torch.tensor([bounds[0]/2-mallet_r, bounds[1] - mallet_r, 1, 1]), 
     },
     default_interaction_type=tensordict.nn.InteractionType.RANDOM,
     return_log_prob=True,
-    # we'll need the log-prob for the numerator of the importance weights
 ).to('cuda')
+
+"""
+q1_net = nn.Sequential(
+    nn.Linear(obs_dim + action_dim, 1024),
+    nn.LayerNorm(1024),
+    nn.ReLU(),
+    nn.Linear(1024, 1024),
+    nn.LayerNorm(1024),
+    nn.ReLU(),
+    nn.Linear(1024, 512),
+    nn.LayerNorm(512),
+    nn.ReLU(),
+    nn.Linear(512, 256),
+    nn.ReLU(),
+    nn.Linear(256, 128),
+    nn.ReLU(),
+    nn.Linear(128, 1)
+)
+
+q2_net = nn.Sequential(
+    nn.Linear(obs_dim + action_dim, 1024),
+    nn.LayerNorm(1024),
+    nn.ReLU(),
+    nn.Linear(1024, 1024),
+    nn.LayerNorm(1024),
+    nn.ReLU(),
+    nn.Linear(1024, 512),
+    nn.LayerNorm(512),
+    nn.ReLU(),
+    nn.Linear(512, 256),
+    nn.ReLU(),
+    nn.Linear(256, 128),
+    nn.ReLU(),
+    nn.Linear(128, 1)
+)
+
+class QNetwork(nn.Module):
+    def __init__(self, network):
+        super().__init__()
+        self.network = network
+    
+    def forward(self, observation, action):
+        # Concatenate observation and action
+        x = torch.cat([observation, action], dim=-1)
+        return self.network(x)
+
+q1_module = TensorDictModule(
+    QNetwork(q1_net), in_keys=["observation", "action"], out_keys=["state_action_value1"]
+).to('cuda')
+
+q2_module = TensorDictModule(
+    QNetwork(q2_net), in_keys=["observation", "action"], out_keys=["state_action_value2"]
+).to('cuda')
+
+q1_target = copy.deepcopy(q1_net)
+q2_target = copy.deepcopy(q2_net)
+
+q1_target_module = TensorDictModule(
+    QNetwork(q1_target), in_keys=["observation", "action"], out_keys=["state_action_value_target1"]
+).to('cuda')
+
+q2_target_module = TensorDictModule(
+    QNetwork(q2_target), in_keys=["observation", "action"], out_keys=["state_action_value_target2"]
+).to('cuda')
+"""
 
 value_net = nn.Sequential(
     nn.Linear(obs_dim, 1024),
@@ -119,9 +198,8 @@ value_net = nn.Sequential(
     nn.ReLU(),
     nn.Linear(256, 128),
     nn.ReLU(),
-    nn.Linear(128, action_dim * 2),
-    ScaledNormalParamExtractor(),
-).to('cuda')
+    nn.Linear(128, 1)
+)
 
 value_module = ValueOperator(
     module=value_net,
@@ -129,34 +207,70 @@ value_module = ValueOperator(
     out_keys=["state_value"]
 ).to('cuda')
 
-#policy_module.load_state_dict(torch.load("policy_weights8.pth")) #8
-#value_module.load_state_dict(torch.load("value_weights8.pth"))
-
-"""
 advantage_module = GAE(
-    gamma=0.99, lmbda=0.5, value_network=value_module
-)
+    gamma=gamma, lmbda=lmbda, value_network=value_module
+).to('cuda')
 
 loss_module = ClipPPOLoss(
     actor_network=policy_module,
     critic_network=value_module,
-    clip_epsilon=0.03, #0.01
-    entropy_bonus=True, 
-    entropy_coef=0.00024, #0.00024,
-    )
+    clip_epsilon=epsilon,
+    entropy_bonus=False, 
+    entropy_coef=entropy_coeff,
+    ).to('cuda')
 
-optim = torch.optim.Adam(loss_module.parameters(), lr=4e-4) #3e-4
-"""
+#target_entropy = -action_dim
+#log_alpha = torch.tensor(np.log(alpha), dtype=float, requires_grad=True, device='cuda')
 
-envs = 8 #2048
+#policy_optimizer = optim.Adam(policy_module.parameters(), lr=lr_policy)
+#q1_optimizer = optim.Adam(q1_module.parameters(), lr=lr_critic)
+#q2_optimizer = optim.Adam(q2_module.parameters(), lr=lr_critic)
+#alpha_optimizer = torch.optim.Adam([log_alpha], lr=lr_alpha)
+#mse = nn.MSELoss()
 
+optimizer = torch.optim.Adam(loss_module.parameters(), lr=lr_optim)
+
+if load_filepath is not None:
+    checkpoint = torch.load(load_filepath, map_location='cuda')
+    policy_module.load_state_dict(checkpoint['policy_state_dict'])
+    value_module.load_state_dict(checkpoint['value_state_dict'])
+    optimizer.load_state_dict(checkpoint['optim_state_dict'])
+    
+    """
+    policy_module.load_state_dict(checkpoint['policy_state_dict'])
+    q1_module.load_state_dict(checkpoint['q1_state_dict'])
+    q2_module.load_state_dict(checkpoint['q2_state_dict'])
+    q1_target_module.load_state_dict(checkpoint['q1_target_state_dict'])
+    q2_target_module.load_state_dict(checkpoint['q2_target_state_dict'])
+    log_alpha = checkpoint['log_alpha']
+    
+    policy_optimizer.load_state_dict(checkpoint['policy_optimizer_state_dict'])
+    q1_optimizer.load_state_dict(checkpoint['q1_optimizer_state_dict'])
+    q2_optimizer.load_state_dict(checkpoint['q2_optimizer_state_dict'])
+    alpha_optimizer.load_state_dict(checkpoint['alpha_optimizer_state_dict'])
+    log_alpha = checkpoint['log_alpha']
+    """
+
+#for p in q1_target_module.parameters():
+#    p.requires_grad = False
+
+#for p in q2_target_module.parameters():
+#    p.requires_grad = False
+
+envs = 2048 #2048
+if not train:
+    envs = 1
 
 # Generate 2D low-frequency Perlin noise
 mallet_init = np.array([[0.25, 0.5], [0,0]])
 mallet_init[1] = bounds - mallet_init[0]
 
-puck_init = np.array([[0.5, 0.5], [0,0]])
-puck_init[1] = bounds - puck_init[0]
+puck_init = np.array([[0.25+mallet_r+2*puck_r, bounds[0]/2-2*puck_r],[2*puck_r,bounds[1]-2*puck_r]])
+puck_pos = np.random.uniform(
+    low=puck_init[:, 0], 
+    high=puck_init[:, 1], 
+    size=(envs, 2)
+)
 
 obs = np.empty((2*envs, obs_dim))
 
@@ -171,13 +285,15 @@ for i in range(4):
 
 puck_noise = np.empty((envs, 2))
 for i in range(2):
-    noise_idx = (puck_init[0]*100).astype(np.int16) + noise_seeds[:,i,:]
+    noise_idx = (puck_pos*100).astype(np.int16) + noise_seeds[:,i,:]
     puck_noise[:,i] = noise_map[noise_idx[:,0], noise_idx[:,1]]
 
 mallet_noise = np.empty((envs, 4)) #mallet, op mallet
 for i in range(4):
     noise_idx = (mallet_init[int(i/2)]*100).astype(np.int16) + noise_seeds[:,2+i%2,:]
     mallet_noise[:,i] = noise_map[noise_idx[:,0], noise_idx[:,1]]
+
+mallet_vel_noise = [-0.02, 0.02]
 
 e_ni = [0.6, 0.9]
 e_nf = 0.3
@@ -196,7 +312,7 @@ coll_vars[:, [6, 13]] = np.random.uniform(e_std[0], e_std[1], (envs, 2))    # e_
 coll_vars[:, [2, 9]] = np.random.uniform(e_nf, coll_vars[:, [0, 7]])  # e_nf
 coll_vars[:, [3, 10]] = np.random.uniform(e_ti, coll_vars[:, [0, 7]]) # e_ti
 coll_vars[:, [4, 11]] = np.random.uniform(coll_vars[:, [1, 8]], e_nr[1]) # e_tr
-coll_vars[:, [5, 12]] = np.random.uniform(e_nf, coll_vars[:, [3, 10]]) # e_tf
+coll_vars[:, [5, 12]] = np.random.uniform(e_nf, coll_vars[:, [2, 9]]) # e_tf
 
 #require C6^2 > 4 * C5 * C7
 
@@ -209,8 +325,8 @@ ab_ranges = np.array([
         [2.86e-6, 5.35e-6],  # a1
         [4.57e-3, 8.55e-3],  # a2
         [4.25e-2, 7.15e-2],  # a3
-        [-2.19e-6, -1.38e-6], # b1 (note: corrected order for uniform sampling)
-        [-3.5e-3, -2.19e-3]   # b2 (note: corrected order for uniform sampling)
+        [-2.19e-6, -1.38e-6], # b1
+        [-3.5e-3, -2.19e-3]   # b2
     ])
 #b3 is 0
 
@@ -220,7 +336,7 @@ ab_vars = np.random.uniform(
         size=(envs, 2, 5)                     # Output shape
     )
 
-ab_vars *= np.random.uniform(0.8, 1.2, size=(envs, 2, 1))
+ab_vars *= np.random.uniform(0.8, 1.3, size=(envs, 2, 1))
 
 ab_obs = np.zeros((2*envs, 5))
 
@@ -241,32 +357,37 @@ ab_obs[envs:, :] = (ab_vars[:,1,:] / pullyR) * ab_obs_scaling[:]
 #[a1, a2, a3, b1, b2]
 #20 + 8 + 4 + 14 + 5
 
-sim.initalize(envs=envs, mallet_r=mallet_r, puck_r=puck_r, goal_w=goal_width, V_max=Vmax, pully_radius=pullyR, coll_vars=coll_vars, ab_vars=ab_vars)
+sim.initalize(envs=envs, mallet_r=mallet_r, puck_r=puck_r, goal_w=goal_width, V_max=Vmax, pully_radius=pullyR, coll_vars=coll_vars, ab_vars=ab_vars, puck_inits=puck_pos)
 
-obs[:envs, :] = np.concatenate([np.tile(np.concatenate([np.full((envs,2), puck_init[0])+puck_noise,
+
+obs[:envs, :] = np.concatenate([np.tile(np.concatenate([puck_pos+puck_noise,
                                     np.full((envs,2), mallet_init[1])+mallet_noise[:,2:]], axis=1), (5,)),
-                                np.full((envs,2), mallet_init[0])+mallet_noise[:,2:],
-                                np.zeros((envs,2)),
-                                np.full((envs,2), mallet_init[0])+mallet_noise[:,2:],
-                                np.zeros((envs,2)),
-                                np.full((envs,2), mallet_init[0]) + mallet_noise[:,2:],
-                                np.random.rand(envs, 2) * 24,
+                                np.full((envs,2), mallet_init[0])+mallet_noise[:,:2],
+                                np.random.uniform(mallet_vel_noise[0], mallet_vel_noise[1], size=(envs,2)),
+                                np.full((envs,2), mallet_init[0])+mallet_noise[:,:2],
+                                np.random.uniform(mallet_vel_noise[0], mallet_vel_noise[1], size=(envs,2)),
+                                np.full((envs,2), mallet_init[0]) + mallet_noise[:,:2],
+                                np.random.rand(envs, 1),
+                                np.random.rand(envs, 1)*2 - 1,
                                 coll_vars,
-                                ab_obs[:envs, :]], axis=1)
+                                ab_obs[:envs, :], 
+                                np.zeros((envs, 1))], axis=1)
 
-obs[envs:, :] = np.concatenate([np.tile(np.concatenate([np.full((envs,2), puck_init[1])+puck_noise,
+obs[envs:, :] = np.concatenate([np.tile(np.concatenate([bounds-puck_pos+puck_noise,
                                     np.full((envs,2), mallet_init[1])+mallet_noise[:,:2]], axis=1), (5,)),
                                 np.full((envs,2), mallet_init[0])+mallet_noise[:,2:],
-                                np.zeros((envs,2)),
+                                np.random.uniform(mallet_vel_noise[0], mallet_vel_noise[1], size=(envs,2)),
                                 np.full((envs,2), mallet_init[0])+mallet_noise[:,2:],
-                                np.zeros((envs,2)),
+                                np.random.uniform(mallet_vel_noise[0], mallet_vel_noise[1], size=(envs,2)),
                                 np.full((envs,2), mallet_init[0]) + mallet_noise[:,2:],
-                                np.random.rand(envs, 2) * 24,
+                                np.random.rand(envs, 1),
+                                np.random.rand(envs, 1)*2 - 1,
                                 coll_vars,
-                                ab_obs[envs:, :]], axis=1)
+                                ab_obs[envs:, :],
+                                np.zeros((envs, 1))], axis=1)
 
 past_obs = obs.copy()
-obs_init = obs[:,:len(obs[0])-19].copy()
+obs_init = obs[:,:len(obs[0])-20].copy()
 
 camera_buffer_size = 20
 
@@ -287,13 +408,13 @@ class CircularCameraBuffer():
     def get(self, indices=[]):
         new_indicies = []
         for idx in indices:
-            new_indicies.append((self.head + idx-1) % self.buffer_size)
+            new_indicies.append((self.head + idx) % self.buffer_size)
         return self.array[np.array(new_indicies)].transpose(1, 0, 2).reshape(2*envs, -1)
     
 camera_buffer = np.empty((camera_buffer_size, 2*envs, 4))
-camera_buffer[:, :envs, :2] = np.full((envs,2), puck_init[0])+puck_noise
-camera_buffer[:, envs:, :2] = np.full((envs,2), puck_init[1])+puck_noise
-camera_buffer[:, :envs, 2:] = np.full((envs,2), mallet_init[1])+mallet_noise[:,:2]
+camera_buffer[:, :envs, :2] = puck_pos+puck_noise
+camera_buffer[:, envs:, :2] = bounds-puck_pos+puck_noise
+camera_buffer[:, :envs, 2:] = np.full((envs,2), mallet_init[1])+mallet_noise[:,2:]
 camera_buffer[:, envs:, 2:] = np.full((envs,2), mallet_init[1])+mallet_noise[:,:2]
 
 camera_buffer = CircularCameraBuffer(camera_buffer, camera_buffer_size)
@@ -314,54 +435,57 @@ class CircularBuffer():
     def get(self, idx):
         return self.array[(self.head + idx) % self.buffer_size]
 
-camera_time = np.empty((camera_buffer_size,))
-camera_time[0] = np.clip(np.random.normal(frame_interval[0], frame_interval[1]), frame_interval[2], frame_interval[3])
-camera_time[1] = 0
-
-for i in range(2, len(camera_time)):
-    camera_time[i] = camera_time[i-1] - np.clip(np.random.normal(frame_interval[0], frame_interval[1]), frame_interval[2], frame_interval[3])
-camera_time = CircularBuffer(camera_time)
+time_from_last_img = 0
 
 inference_img = np.zeros((camera_buffer_size,), dtype=np.bool_)
 for i in range(len(inference_img)):
-    if i % 2 == 1:
+    if i % 2 == 0:
         inference_img[i] = True
 inference_img = CircularBuffer(inference_img)
 
-camera_send_delay = np.empty((camera_buffer_size,))
-for i in range(len(camera_send_delay)):
-    camera_send_delay[i] = np.clip(np.random.normal(camera_to_laptop_delay[0], camera_to_laptop_delay[1]), camera_to_laptop_delay[2], camera_to_laptop_delay[3])
-camera_send_delay = CircularBuffer(camera_send_delay)
+agent_actions = np.empty((camera_buffer_size,))
+for i in range(len(agent_actions)):
+    agent_actions[i] = np.clip(np.random.normal(image_delay[0], image_delay[1]), image_delay[2], image_delay[3]) - i*camera_period
+agent_actions = CircularBuffer(agent_actions)
 
-camera_arrivals = np.empty((camera_buffer_size,))
-for i in range(len(camera_arrivals)):
-    camera_arrivals[i] = camera_time.get(i) + camera_send_delay.get(i)
-camera_arrivals = CircularBuffer(camera_arrivals)
+mallet_time = np.empty((camera_buffer_size,))
+for i in range(len(mallet_time)):
+    mallet_time[i] = agent_actions.get(i) - np.clip(np.random.normal(mallet_delay[0], mallet_delay[1]), mallet_delay[2], mallet_delay[3])
+mallet_time = CircularBuffer(mallet_time)
 
-inference_serial_delay = np.empty((camera_buffer_size))
-for i in range(len(inference_serial_delay)):
-    inference_serial_delay[i] = np.clip(np.random.normal(image_and_inference_delay[0], image_and_inference_delay[1]),image_and_inference_delay[2], image_and_inference_delay[3]) +\
-                                    np.clip(np.random.normal(serial_delay[0], serial_delay[1]),serial_delay[2], serial_delay[3])
-inference_serial_delay = CircularBuffer(inference_serial_delay)
-
-batch_size = 128
 save_num = 0
 
 #move timeline to first action time
 while True:
-    next_NN_inference = np.inf
     img_idx = None
+    next_img = time_from_last_img + camera_period
+    next_mallet = np.inf
+    next_action = np.inf
     for i in range(camera_buffer_size):
         if not inference_img.get(i):
             continue
-        action_time = camera_arrivals.get(i) + inference_serial_delay.get(i)
-        if action_time > 1e-8 and action_time < next_NN_inference:
-            next_NN_inference = action_time
+
+        sample_mallet = mallet_time.get(i)
+        if sample_mallet < 1e-8:
+            break
+        if sample_mallet < next_mallet:
+            next_mallet = sample_mallet
+
+    for i in range(camera_buffer_size):
+        if not inference_img.get(i):
+            continue
+
+        action_time = agent_actions.get(i)
+        if action_time < 1e-8:
+            break
+        if action_time < next_action:
+            next_action = action_time
             img_idx = i
 
-    if camera_time.get(0) < next_NN_inference:
+
+    if next_img < next_mallet and next_img < next_action:
         #mallet_pos (mallet, op_mallet)
-        mallet_pos, puck_pos, cross_left, cross_right = sim.step(camera_time.get(0))
+        mallet_pos, _, puck_pos, cross_left, cross_right = sim.step(next_img)
         for i in range(2):
             noise_idx = (puck_pos*100).astype(np.int16) + noise_seeds[:,i,:]
             puck_noise[:,i] = noise_map[noise_idx[:,0], noise_idx[:,1]]
@@ -374,17 +498,31 @@ while True:
         op_mallet_pos = np.concatenate([mallet_pos[:,1,:] + mallet_noise[:,2:], bounds - mallet_pos[:,0,:] + mallet_noise[:,:2]], axis=0)
         camera_buffer.put(np.concatenate([puck_pos, op_mallet_pos], axis=1))
 
-        camera_arrivals.subtract(camera_time.get(0))
-        camera_time.subtract(camera_time.get(0))
-        camera_time.put(np.clip(np.random.normal(frame_interval[0], frame_interval[1]), frame_interval[2], frame_interval[3]))
+        time_from_last_img = 0
+        agent_actions.subtract(next_img)
+        mallet_time.subtract(next_img)
+        agent_actions.put(np.clip(np.random.normal(image_delay[0], image_delay[1]), image_delay[2], image_delay[3]))
+        mallet_time.put(agent_actions.get(0) - np.clip(np.random.normal(mallet_delay[0], mallet_delay[1]), mallet_delay[2], mallet_delay[3]))
 
         inference_img.put(np.logical_not(inference_img.get(0)))
-        camera_send_delay.put(np.clip(np.random.normal(camera_to_laptop_delay[0], camera_to_laptop_delay[1]), camera_to_laptop_delay[2], camera_to_laptop_delay[3]))
-        camera_arrivals.put(camera_time.get(0) + camera_send_delay.get(0))
-        inference_serial_delay.put(np.clip(np.random.normal(image_and_inference_delay[0], image_and_inference_delay[1]), image_and_inference_delay[2], image_and_inference_delay[3]) +\
-                                    np.clip(np.random.normal(serial_delay[0], serial_delay[1]),serial_delay[2],serial_delay[3]))
-    else:
-        _, _, cross_left, cross_right = sim.step(next_NN_inference)
+    elif next_mallet < next_img and next_mallet < next_action:
+        mallet_pos, mallet_vel, _, cross_left, cross_right = sim.step(next_mallet)
+
+        #mallet_noise = np.empty((envs, 4)) #mallet, op mallet
+        for i in range(4):
+            noise_idx = (mallet_pos[:,int(i/2),:]*100).astype(np.int16) + noise_seeds[:,2+i%2,:]
+            mallet_noise[:,i] = noise_map[noise_idx[:,0], noise_idx[:,1]]
+        #(2*envs, 2)
+        past_obs[:,20:22] = np.concatenate([mallet_pos[:,0,:] + mallet_noise[:,:2], bounds - mallet_pos[:,1,:] + mallet_noise[:,2:]], axis=0)
+        vel_noise = np.random.uniform(mallet_vel_noise[0], mallet_vel_noise[1], size=(envs,2,2))
+        past_obs[:,22:24] = np.concatenate([mallet_vel[:,0,:] + vel_noise[:,0,:], -mallet_vel[:,1,:] + vel_noise[:,1,:]], axis=0)
+        
+        time_from_last_img -= next_mallet
+        agent_actions.subtract(next_mallet)
+        mallet_time.subtract(next_mallet)
+
+    elif next_action < next_img and next_action < next_mallet:
+        _, _, _, cross_left, cross_right = sim.step(next_action)
 
         #[puck_pos, opp_mallet_pos] #guess mean low std
         #[mallet_pos, mallet_vel, past mallet_pos, past_mallet_vel, past action (x0, V)]
@@ -394,8 +532,9 @@ while True:
         camera_obs = camera_buffer.get(indices=[img_idx, img_idx+1, img_idx+2, img_idx+5, img_idx+11])
         past_obs[:,:20] = camera_obs
 
-        camera_time.subtract(next_NN_inference)
-        camera_arrivals.subtract(next_NN_inference)
+        time_from_last_img -= next_action
+        agent_actions.subtract(next_action)
+        mallet_time.subtract(next_action)
 
         break
 
@@ -403,19 +542,21 @@ dones = np.zeros((2*envs,), dtype=np.bool_)
 rewards = np.zeros((2*envs,))
 
 xf_mallet_noise = np.empty((envs, 4))
+miss_penalty = 0.5
+actions_since_cross = np.zeros((envs,), dtype=np.int32)
 
-if True:
+if train:
 
-    buffer_size = 300_000
+    buffer_size = 500_000
     replay_buffer = TensorDictReplayBuffer(
         storage=LazyTensorStorage(buffer_size)
     )
 
     #Simulation loop
     for update in range(500000):  # Training loop
+        print(update)
         print("simulating...")
-        for timestep in range(50):
-
+        for timestep in range(122):
             tensor_obs = TensorDict({"observation": torch.tensor(past_obs, dtype=torch.float32)}).to('cuda')
 
             policy_out = policy_module(tensor_obs)
@@ -423,52 +564,86 @@ if True:
             policy_out["sample_log_prob"] = torch.maximum(policy_out["sample_log_prob"], torch.tensor(-8, dtype=torch.float32))
             log_prob = policy_out["sample_log_prob"].detach().to('cpu')
 
-            if np.isnan(log_prob.numpy()).any():
-                print("NAN")
-                break
-
             actions_np = actions.numpy()
 
-            xf = np.stack([actions_np[:envs, :2], actions_np[envs:,:2]], axis=1)
-            #xf = np.full((envs,2,2), 0.3)
-            
-            #xf = np.random.rand(envs, 2, 2) * (0.8 - 0.2) + 0.2
-            obs[:envs,28:30] = xf[:,0,:]
-            obs[envs:,28:30] = xf[:,1,:]
+            obs[:, 24:28] = past_obs[:, 20:24]
+            obs[:, 28:32] = actions_np
 
+            xf = np.stack([actions_np[:envs, :2], actions_np[envs:,:2]], axis=1)
             xf[:,1,:] = bounds - xf[:,1,:]
 
-             #mallet, op mallet
+                #mallet, op mallet
             for i in range(4):
                 noise_idx = (xf[:,int(i/2),:]*100).astype(np.int16) + noise_seeds[:,2+i%2,:]
                 xf_mallet_noise[:,i] = noise_map[noise_idx[:,0], noise_idx[:,1]]
             xf[:,0,:] -= xf_mallet_noise[:,:2]
             xf[:,1,:] += xf_mallet_noise[:,2:]
 
-            xf[:,:,0] = np.clip(xf[:,:,0], mallet_r+1e-4, bounds[0]-mallet_r-1e-4)
+            xf[:,0,0] = np.clip(xf[:,0,0], mallet_r+1e-4, bounds[0]/2-mallet_r-1e-4)
+            xf[:,1,0] = np.clip(xf[:,1,0], bounds[0]/2+mallet_r+1e-4, bounds[0]-mallet_r-1e-4)
             xf[:,:,1] = np.clip(xf[:,:,1], mallet_r+1e-4, bounds[1]-mallet_r-1e-4)
 
-            Vo = np.stack([actions_np[:envs, 2:], actions_np[envs:,2:]], axis=1)
-            #Vo = np.full((envs, 2, 2), np.array([23, 23]))
-            obs[:envs, 30:32] = Vo[:,0,:]
-            obs[envs:, 30:32] = Vo[:,1,:]
+            Vo = actions_np[:,2][:, None] * Vmax * np.stack((1+actions_np[:,3], 1-actions_np[:,3]), axis=1)
+            too_low_voltage = np.logical_or(Vo[:,0] < 0.3, Vo[:,1] < 0.3)
+            rewards[too_low_voltage] -= 0.01
+            if too_low_voltage[0]:
+                print("LOW VOLTAGE")
+            Vo = np.stack([Vo[:envs,:], Vo[envs:,:]], axis=1)
 
             sim.take_action(xf, Vo)
 
+            #midpoint_acc = sim.get_xpp(0.004)
+            #rewards[:envs] += (100 - np.sqrt(np.sum(midpoint_acc[:,0,:]**2, axis=1))) / 100000
+            #rewards[envs:] += (100 - np.sqrt(np.sum(midpoint_acc[:,1,:]**2, axis=1))) / 100000
+
+            #acc_time = sim.get_a()
+            #acc_time = np.concatenate([np.max(acc_time[:,0,:],axis=1), np.max(acc_time[:,1,:],axis=1)])
+            #rewards += np.clip(0.05 - acc_time, -10, 0) / 500
+
+            on_edge_mask = np.logical_or(np.logical_or(xf[:,0,0] < 0.01+mallet_r, xf[:,0,0] > bounds[0]/2-mallet_r - 0.01), np.logical_or(xf[:,0,1] < mallet_r + 0.01, xf[:,0,1] > bounds[1]-mallet_r - 0.01))
+            rewards[:envs][on_edge_mask] -= 0.01
+
+            on_edge_mask = np.logical_or(np.logical_or(xf[:,1,0] < bounds[0]/2+mallet_r + 0.01, xf[:,1,0] > bounds[0] -mallet_r- 0.01), np.logical_or(xf[:,1,1] < mallet_r+0.01, xf[:,1,1] > bounds[1]-mallet_r - 0.01))
+            rewards[envs:][on_edge_mask] -= 0.01
+
+            #puck_left = obs[:envs,0] < bounds[0]/2
+
+            #rewards[:envs] += 0.05*(np.linalg.norm(xf[:,0,:] - obs[:envs,:2], axis=1) < 0.1)
+            #rewards[envs:] += 0.05*(np.linalg.norm(xf[:,1,:] - obs[envs:,:2], axis=1) < 0.1)
+
+            #print(rewards[0])
+
             while True:
-                next_NN_inference = np.inf
                 img_idx = None
+                next_img = time_from_last_img + camera_period
+                next_mallet = np.inf
+                next_action = np.inf
                 for i in range(camera_buffer_size):
                     if not inference_img.get(i):
                         continue
-                    action_time = camera_arrivals.get(i) + inference_serial_delay.get(i)
-                    if action_time > 1e-8 and action_time < next_NN_inference:
-                        next_NN_inference = action_time
+
+                    sample_mallet = mallet_time.get(i)
+                    if sample_mallet < 1e-8:
+                        break
+                    if sample_mallet < next_mallet:
+                        next_mallet = sample_mallet
+
+                for i in range(camera_buffer_size):
+                    if not inference_img.get(i):
+                        continue
+
+                    action_time = agent_actions.get(i)
+                    if action_time < 1e-8:
+                        break
+                    if action_time < next_action:
+                        next_action = action_time
                         img_idx = i
 
-                if camera_time.get(0) < next_NN_inference:
+
+                if next_img < next_mallet and next_img < next_action:
                     #mallet_pos (mallet, op_mallet)
-                    mallet_pos, puck_pos, cross_left, cross_right = sim.step(camera_time.get(0))
+                    mallet_pos, _, puck_pos, cross_left, cross_right = sim.step(next_img)
+
                     env_err = sim.check_state()
                     entered_left_goal_mask, entered_right_goal_mask = sim.check_goal()
                     if len(env_err) > 0:
@@ -477,6 +652,9 @@ if True:
                         for idx in env_err:
                             dones[idx] = True
                             dones[envs+idx] = True
+                            rewards[idx] -= -10.0
+                            rewards[envs+idx] -= -10.0
+
                     dones[:envs][entered_left_goal_mask | entered_right_goal_mask] = True
                     dones[envs:][entered_left_goal_mask | entered_right_goal_mask] = True
 
@@ -485,8 +663,19 @@ if True:
                     rewards[envs:][entered_left_goal_mask] += 10
                     rewards[envs:][entered_right_goal_mask] -= 10
 
+                    rewards[:envs] += np.where(cross_right > 0,\
+                                    cross_right / 100,\
+                                    np.where(cross_right == -0.5, miss_penalty, 0))
+                    rewards[envs:] += np.where(cross_left > 0,\
+                                    cross_left / 100,\
+                                    np.where(cross_left == -0.5, miss_penalty, 0))
+                    
+                    #actions_since_cross[np.logical_or(cross_left != -1, cross_right != -1)] = 0
+
                     for i in range(2):
                         noise_idx = (puck_pos*100).astype(np.int16) + noise_seeds[:,i,:]
+                        noise_idx[:,0] = np.clip(noise_idx[:,0], 0, 1999)
+                        noise_idx[:,1] = np.clip(noise_idx[:,1], 0, 999)
                         puck_noise[:,i] = noise_map[noise_idx[:,0], noise_idx[:,1]]
                     puck_pos = np.concatenate([puck_pos + puck_noise, bounds - puck_pos + puck_noise],axis=0)
 
@@ -497,20 +686,16 @@ if True:
                     op_mallet_pos = np.concatenate([mallet_pos[:,1,:] + mallet_noise[:,2:], bounds - mallet_pos[:,0,:] + mallet_noise[:,:2]], axis=0)
                     camera_buffer.put(np.concatenate([puck_pos, op_mallet_pos], axis=1))
 
-                    obs_mallet_pos = mallet_pos[:,0,:] + mallet_noise[:,:2]
-                    op_obs_mallet_pos = bounds - mallet_pos[:,1,:] + mallet_noise[:,2:]
-
-                    camera_arrivals.subtract(camera_time.get(0))
-                    camera_time.subtract(camera_time.get(0))
-                    camera_time.put(np.clip(np.random.normal(frame_interval[0], frame_interval[1]), frame_interval[2], frame_interval[3]))
+                    time_from_last_img = 0
+                    agent_actions.subtract(next_img)
+                    mallet_time.subtract(next_img)
+                    agent_actions.put(np.clip(np.random.normal(image_delay[0], image_delay[1]), image_delay[2], image_delay[3]))
+                    mallet_time.put(agent_actions.get(0) - np.clip(np.random.normal(mallet_delay[0], mallet_delay[1]), mallet_delay[2], mallet_delay[3]))
 
                     inference_img.put(np.logical_not(inference_img.get(0)))
-                    camera_send_delay.put(np.clip(np.random.normal(camera_to_laptop_delay[0], camera_to_laptop_delay[1]), camera_to_laptop_delay[2], camera_to_laptop_delay[3]))
-                    camera_arrivals.put(camera_time.get(0) + camera_send_delay.get(0))
-                    inference_serial_delay.put(np.clip(np.random.normal(image_and_inference_delay[0], image_and_inference_delay[1]), image_and_inference_delay[2], image_and_inference_delay[3]) +\
-                                                np.clip(np.random.normal(serial_delay[0], serial_delay[1]),serial_delay[2],serial_delay[3]))
-                else:
-                    _, _, cross_left, cross_right = sim.step(next_NN_inference)
+                elif next_mallet < next_img and next_mallet < next_action:
+                    mallet_pos, mallet_vel, _, cross_left, cross_right = sim.step(next_mallet)
+
                     env_err = sim.check_state()
                     entered_left_goal_mask, entered_right_goal_mask = sim.check_goal()
                     if len(env_err) > 0:
@@ -519,6 +704,8 @@ if True:
                         for idx in env_err:
                             dones[idx] = True
                             dones[envs+idx] = True
+                            rewards[idx] -= -10.0
+                            rewards[envs+idx] -= -10.0
                     dones[:envs][entered_left_goal_mask | entered_right_goal_mask] = True
                     dones[envs:][entered_left_goal_mask | entered_right_goal_mask] = True
 
@@ -526,41 +713,106 @@ if True:
                     rewards[:envs][entered_right_goal_mask] += 10
                     rewards[envs:][entered_left_goal_mask] += 10
                     rewards[envs:][entered_right_goal_mask] -= 10
-                    #take action
-                    #[puck_pos, opp_mallet_pos] #guess mean low std
-                    #[mallet_pos, mallet_vel, past mallet_pos, past_mallet_vel, past action (x0, V)]
-                    #[e_n0, e_nr, e_nf, e_t0, e_tr, e_tf, var] x2 mallet and wall,
+
+                    rewards[:envs] += np.where(cross_right > 0,\
+                                    cross_right / 100,\
+                                    np.where(cross_right == -0.5, miss_penalty, 0))
+                    rewards[envs:] += np.where(cross_left > 0,\
+                                    cross_left / 100,\
+                                    np.where(cross_left == -0.5, miss_penalty, 0))
+                    
+                    #actions_since_cross[np.logical_or(cross_left!=-1, cross_right!=-1)] = 0
+
+                    #mallet_noise = np.empty((envs, 4)) #mallet, op mallet
+                    for i in range(4):
+                        noise_idx = (mallet_pos[:,int(i/2),:]*100).astype(np.int16) + noise_seeds[:,2+i%2,:]
+                        mallet_noise[:,i] = noise_map[noise_idx[:,0], noise_idx[:,1]]
+                    #(2*envs, 2)
+                    obs[:,20:22] = np.concatenate([mallet_pos[:,0,:] + mallet_noise[:,:2], bounds - mallet_pos[:,1,:] + mallet_noise[:,2:]], axis=0)
+                    vel_noise = np.random.uniform(mallet_vel_noise[0], mallet_vel_noise[1], size=(envs,2,2))
+                    obs[:,22:24] = np.concatenate([mallet_vel[:,0,:] + vel_noise[:,0,:], -mallet_vel[:,1,:] + vel_noise[:,1,:]], axis=0)
+                    
+                    time_from_last_img -= next_mallet
+                    agent_actions.subtract(next_mallet)
+                    mallet_time.subtract(next_mallet)
+
+                elif next_action < next_img and next_action < next_mallet:
+                    _, _, puck_pos, cross_left, cross_right = sim.step(next_action)
+
+                    env_err = sim.check_state()
+                    entered_left_goal_mask, entered_right_goal_mask = sim.check_goal()
+                    if len(env_err) > 0:
+                        print("err")
+                        print(env_err)
+                        for idx in env_err:
+                            dones[idx] = True
+                            dones[envs+idx] = True
+                            rewards[idx] -= -10.0
+                            rewards[envs+idx] -= -10.0
+                    dones[:envs][entered_left_goal_mask | entered_right_goal_mask] = True
+                    dones[envs:][entered_left_goal_mask | entered_right_goal_mask] = True
+
+                    rewards[:envs][entered_left_goal_mask] -= 10
+                    rewards[:envs][entered_right_goal_mask] += 10
+                    rewards[envs:][entered_left_goal_mask] += 10
+                    rewards[envs:][entered_right_goal_mask] -= 10
+
+                    rewards[:envs] += np.where(cross_right > 0,\
+                                    cross_right / 100,\
+                                    np.where(cross_right == -0.5, miss_penalty, 0))
+                    rewards[envs:] += np.where(cross_left > 0,\
+                                    cross_left / 100,\
+                                    np.where(cross_left == -0.5, miss_penalty, 0))
+                    
+                    puck_left = puck_pos[:,0] < (bounds[0]/2)
+                    obs[:envs,-1][puck_left] += 1/(1*60)
+                    obs[:envs,-1][np.logical_not(puck_left)] = 0
+                    obs[envs:,-1][np.logical_not(puck_left)] += 1/(1*60)
+                    obs[envs:,-1][puck_left] = 0
+
+                    #actions_since_cross[np.logical_or(cross_left!=-1, cross_right!=-1)] = 0
 
                     # (2*envs, 20)
                     camera_obs = camera_buffer.get(indices=[img_idx, img_idx+1, img_idx+2, img_idx+5, img_idx+11])
-
                     obs[:,:20] = camera_obs
 
-                    camera_time.subtract(next_NN_inference)
-                    camera_arrivals.subtract(next_NN_inference)
+                    time_from_last_img -= next_action
+                    agent_actions.subtract(next_action)
+                    mallet_time.subtract(next_action)
 
                     break
+
+            timer_reset = np.logical_or(obs[:envs,-1] > 0.999, obs[envs:,-1] > 0.999)
+            dones[:envs][timer_reset] = True
+            dones[envs:][timer_reset] = True
+            rewards[obs[:,-1] > 0.999] -= 10.0
             
-
-
             replay_buffer.extend(TensorDict({
-                    "observation": tensor_obs["observation"],
-                    "action": torch.tensor(obs[:,28:32]),
-                    "reward": torch.zeros((2*envs, 1)),
-                    "done": torch.tensor(dones),
-                    "next_observation": torch.tensor(obs),
+                    "observation": tensor_obs["observation"].to('cpu'),
+                    "action": torch.tensor(obs[:,28:32], dtype=torch.float32),
+                    "reward": torch.tensor(rewards, dtype=torch.float32),
+                    "done": torch.tensor(dones, dtype=torch.bool),
+                    "next_observation": torch.tensor(obs, dtype=torch.float32),
                     "sample_log_prob": log_prob
                 }, batch_size=[2*envs]))
-            
-            past_obs = obs.copy()
 
+            obs[:envs][timer_reset] = 0
+            obs[envs:][timer_reset] = 0
+            
             sim.display_state(0)
+
+            #actions_since_cross += 1
+            #actions_since_cross[dones[:envs]] = 0
+            #too_long_reset = actions_since_cross > 60*4
+            #actions_since_cross[too_long_reset] = 0
+            #dones[:envs][too_long_reset] = True
+            #dones[envs:][too_long_reset] = True
 
             num_resets = int(np.sum(dones) / 2)
 
             if num_resets > 0:
                 coll_vars = np.empty((num_resets, 14))
-        
+
                 # Independent samples
                 coll_vars[:, [0, 7]] = np.random.uniform(e_ni[0], e_ni[1], (num_resets, 2))    # e_ni
                 coll_vars[:, [1, 8]] = np.random.uniform(e_nr[0], e_nr[1], (num_resets, 2))      # e_nr  
@@ -570,7 +822,7 @@ if True:
                 coll_vars[:, [2, 9]] = np.random.uniform(e_nf, coll_vars[:, [0, 7]])  # e_nf
                 coll_vars[:, [3, 10]] = np.random.uniform(e_ti, coll_vars[:, [0, 7]]) # e_ti
                 coll_vars[:, [4, 11]] = np.random.uniform(coll_vars[:, [1, 8]], e_nr[1]) # e_tr
-                coll_vars[:, [5, 12]] = np.random.uniform(e_nf, coll_vars[:, [3, 10]]) # e_tf
+                coll_vars[:, [5, 12]] = np.random.uniform(e_nf, coll_vars[:, [2, 9]]) # e_tf
 
                 ab_vars = np.random.uniform(
                         low=ab_ranges[:, 0].reshape(1, 1, 5),    # Shape: (1, 1, 5)
@@ -578,456 +830,462 @@ if True:
                         size=(num_resets, 2, 5)                     # Output shape
                     )
 
-                ab_vars *= np.random.uniform(0.8, 1.2, size=(num_resets, 2, 1))
+                ab_vars *= np.random.uniform(0.8, 1.3, size=(num_resets, 2, 1))
 
                 ab_obs = np.zeros((2*num_resets, 5))
                     
                 ab_obs[:num_resets, :] = (ab_vars[:,0,:] / pullyR) * ab_obs_scaling[:]
                 ab_obs[num_resets:, :] = (ab_vars[:,1,:] / pullyR) * ab_obs_scaling[:]
 
-                obs[dones] = np.concatenate([obs_init[dones], np.tile(coll_vars, (2,1)), ab_obs], axis=1)
+                obs[dones] = np.concatenate([obs_init[dones], np.tile(coll_vars, (2,1)), ab_obs, np.zeros((2*num_resets, 1))], axis=1)
 
                 camera_buffer.reset(np.where(dones)[0])
 
                 sim.reset_sim(np.where(dones[:envs])[0], coll_vars, ab_vars)
+
+            past_obs = obs.copy()
+            dones[:] = False
+            rewards[:] = 0
                 
-                
-            """
-            cross_left = np.maximum(cross_left, cross_left2)
-            cross_right = np.maximum(cross_right, cross_right2)
-            puck_pos_noM, puck_vel_noM = sim.step_noM(Ts*2)
-
-            attack_copy = np.copy(attack)
-
-            dones = np.full((2*envs), False)
-            rewards = np.zeros((2*envs))
-
-            #Shooting reward
-            dones[:envs] = np.logical_or(cross_right > 0, cross_right == -0.5)
-            dones[envs:] = np.logical_or(cross_left > 0, cross_left == -0.5)
-
-            attack_copy[dones] = False
-
-            rewards[:envs] += np.where(cross_right > 0,\
-                                 np.where(attack[:envs], np.maximum(cross_right,0)/50, np.sqrt(np.maximum(cross_right,0))/120),\
-                                 np.where(np.logical_and(cross_right == -0.5, np.logical_not(attack[:envs])), -0.05, 0))
-            rewards[envs:] += np.where(cross_left > 0,\
-                                 np.where(attack[envs:], np.maximum(cross_left, 0)/50, np.sqrt(np.maximum(cross_left, 0))/120),\
-                                 np.where(np.logical_and(cross_left == -0.5, np.logical_not(attack[envs:])), -0.05, 0))
-
-            env_err = sim.check_state()
-
-            if len(env_err) > 0:
-                sim.reset_sim(env_err)
-                for idx in env_err:
-                    mallet_pos[idx] = mallet_init
-                    puck_pos[idx] = puck_init[0]
-                    mallet_vel[idx,:,:] = 0.0
-                    puck_vel[idx,:] = 0.0
-                    puck_pos_noM[idx] = puck_init[0]
-                    puck_vel_noM[idx,:] = 0.0
-                    rewards[idx] = -1
-                    rewards[envs+idx] = -1
-                    dones[idx] = True
-                    dones[idx+envs] = True
-                    attack_copy[idx] = True
-                    attack_copy[idx+envs] = False
-
-            goals = sim.check_goal()
-            for idx in range(envs):
-                if goals[idx] == 1:
-                    rewards[idx+envs] = -1
-
-                elif goals[idx] == -1:
-                    rewards[idx] = -1
-
-                if goals[idx] != 0:
-                    dones[idx] = True
-                    dones[idx+envs] = True
-                    mallet_pos[idx,:,:] = mallet_init
-                    mallet_vel[idx,:,:] = 0.0
-                    puck_pos[idx] = puck_init[0]
-                    puck_vel[idx,:] = 0.0
-                    puck_pos_noM[idx] = puck_init[0]
-                    puck_vel_noM[idx,:] = 0.0
-                    attack_copy[idx] = True
-                    attack_copy[idx+envs] = False
-
-            #Energy Penalty
-            past_mallet = obs["observation"].numpy()[:, :2]
-            past_mallet[envs:] = bounds - past_mallet[envs:]
-            new_dist = np.sqrt(np.sum((past_mallet - np.concatenate([xf[:,0,:], xf[:,1,:]]))**2,axis=1))
-
-            voltage = np.concatenate([actions_np[:envs, 2:], actions_np[envs:,2:]])
-            voltage_cost = np.sqrt(np.sum(voltage**2, axis=1))
-
-            rewards += -new_dist / 50 - voltage_cost / 1400
-
-            #Near edge penalty
-            #new_dist = np.max(np.abs(np.concatenate([puck_init[0] - xf[:,0,:], puck_init[1] - xf[:,1,:]])),axis=1)
-            #rewards += np.where(new_dist > 0.44, -0.1, 0)
-
-            #Stabalization
-            dist_L = np.sqrt(np.sum((puck_pos - np.array([0.65,0.5]))**2, axis=1))
-            dist_R = np.sqrt(np.sum((puck_pos - np.array([1.35, 0.5]))**2, axis=1))
-
-            left_puck = (puck_pos[:,0] < xbound/2)
-            rewards -= 0.003
-
-            vel_norm = np.linalg.norm(puck_vel, axis=1)
-
-            stabalized_l = ~attack_copy[:envs] & left_puck & (vel_norm > 0.3) & (np.abs(puck_vel[:,1])/np.maximum(np.abs(puck_vel[:,0]), 0.001) > 2) & (np.abs(puck_pos[:,0] - 0.65) < 0.3)
-            stabalized_l = stabalized_l & np.random.choice([False, True], size=envs, p=[0.3, 0.7])
-            stabalized_r = ~attack_copy[envs:] & ~left_puck & (vel_norm > 0.3) & (np.abs(puck_vel[:,1])/np.maximum(np.abs(puck_vel[:,0]), 0.001) > 2) & (np.abs(puck_pos[:,0] - 1.35) < 0.3)
-            stabalized_r = stabalized_r & np.random.choice([False, True], size=envs, p=[0.3, 0.7])
-            stabalized = np.concatenate([stabalized_l, stabalized_r])
-
-            dones[stabalized] = True
-            attack_copy[stabalized] = True
-
-            rewards[:envs][stabalized_l] += 2.0
-            rewards[envs:][stabalized_r] += 2.0
-
-            #rewards -= 0.003
-
-            attack = attack_copy
-
-            next_obs_np = np.empty((2*envs, obs_dim))
-            next_obs_np[:envs,:] = np.concatenate([mallet_pos[:,0,:], mallet_pos[:,1,:], puck_pos, mallet_vel[:,0,:], mallet_vel[:,1,:], puck_vel, puck_pos_noM, puck_vel_noM, attack[:envs].reshape(-1, 1)], axis=1) #(game, 12)
-            next_obs_np[envs:,:] = np.concatenate([bounds - mallet_pos[:,1,:], bounds - mallet_pos[:,0,:], bounds - puck_pos, -mallet_vel[:,1,:], -mallet_vel[:,0,:], -puck_vel, bounds - puck_pos_noM, -puck_vel_noM, attack[envs:].reshape(-1,1)], axis=1)
-
-            pos_range = (-0.02, 0.02)  # Range for position (x and y)
-            vel_range = (-0.06, 0.06)  # Range for velocity
-
-            # Create random perturbations for position and velocity
-            pos_perturb = np.random.uniform(pos_range[0], pos_range[1], next_obs_np[:, :2].shape)
-            vel_perturb = np.random.uniform(vel_range[0], vel_range[1], next_obs_np[:, 2:4].shape)
-
-            # Add the random perturbations to positions and velocities
-            next_obs_np[:envs, :2] += pos_perturb[:envs]
-            next_obs_np[:envs, 2:4] += vel_perturb[:envs]
-            next_obs_np[envs:, :2] += pos_perturb[envs:]
-            next_obs_np[envs:, 2:4] += vel_perturb[envs:]
-
-            rewards = torch.tensor(rewards, dtype=torch.float32)  # Rewards
-            next_obs = torch.tensor(next_obs_np, dtype=torch.float32)  # Next observations
-            terminated = torch.tensor(dones)
-            dones = torch.tensor(dones) # Done flags (0 or 1)
-
-            replay_buffer.extend(TensorDict({
-                    "observation": past_obs["observation"],
-                    "action": actions,
-                    "reward": rewards,
-                    "done": dones,
-                    "next_observation": obs["observation"],
-                    "terminated": terminated,
-                    "sample_log_prob": log_prob
-                }, batch_size=[actions.shape[0]]))
-
-            past_obs = obs
-            obs = TensorDict({"observation": next_obs})
-
         print("training...")
-        for _ in range(250):
-            sample = replay_buffer.sample(batch_size)
+        for i in range(500):
+            batch = replay_buffer.sample(batch_size).to('cuda')
+            
+            t_obs = batch["observation"]
+            t_action = batch["action"]
+            t_reward = batch["reward"]
+            t_done = batch["done"]
+            t_next_obs = batch["next_observation"]
+            t_log_prob = batch["sample_log_prob"]
+
+            #[puck_pos, opp_mallet_pos] #guess mean low std
+            #[mallet_pos, mallet_vel, past mallet_pos, past_mallet_vel, xf, vo]
+            #[e_n0, e_nr, e_nf, e_t0, e_tr, e_tf, var] x2 mallet and wall,
+            #[a1, a2, a3, b1, b2]
+
+            t_obs_flip = t_obs.clone().detach()
+            t_obs_flip[:,1:22:2] = bounds[1] - t_obs_flip[:, 1:22:2]
+            t_obs_flip[:, 23] *= -1
+            t_obs_flip[:, 27] *= -1
+            t_obs_flip[:, 25] = bounds[1] - t_obs_flip[:, 25]
+            t_obs_flip[:, 29] = bounds[1] - t_obs_flip[:, 29]
+
+            t_action_flip = t_action.clone().detach()
+            t_action_flip[:,1] = bounds[1] - t_action_flip[:,1]
+
+            t_next_obs_flip = t_next_obs.clone().detach()
+            t_next_obs_flip[:,1:22:2] = bounds[1] - t_next_obs_flip[:, 1:22:2]
+            t_next_obs_flip[:, 23] *= -1
+            t_next_obs_flip[:, 27] *= -1
+            t_next_obs_flip[:, 25] = bounds[1] - t_next_obs_flip[:, 25]
+            t_next_obs_flip[:, 29] = bounds[1] - t_next_obs_flip[:, 29]
 
             tensordict_data = TensorDict({
-                "action": sample["action"],
-                "observation": sample["observation"],
-                # Create a nested structure for "next" fields
+                "action": t_action,
+                "observation": t_obs,
                 "next": TensorDict({
-                    "done": sample["done"],
-                    "observation": sample["next_observation"],
-                    "reward": sample["reward"],
-                    "terminated": sample["terminated"]
+                    "done": t_done,
+                    "observation": t_next_obs,
+                    "reward": t_reward,
+                    "terminated": t_done
                 }, batch_size=[batch_size]),
-                "sample_log_prob": sample["sample_log_prob"]
-            }, batch_size=[batch_size])
+                "sample_log_prob": t_log_prob
+            }, batch_size=[batch_size]).to('cuda')
 
             advantage_module(tensordict_data)
 
             loss_vals = loss_module(tensordict_data)
             loss_value = (
-                    0.2 * loss_vals["loss_objective"]
-                    + loss_vals["loss_critic"]
-                    + loss_vals["loss_entropy"]
-                )
+                loss_vals["loss_objective"]
+                + loss_vals["loss_critic"]
+                #+ loss_vals["loss_entropy"]
+            )
 
-            # Perform optimization
-            optim.zero_grad()
-            #if np.isnan(loss_value.detach().numpy()):
-            #    print("NAN")
+            optimizer.zero_grad()
             loss_value.backward()
-            torch.nn.utils.clip_grad_norm_(loss_module.parameters(), 1)
-            optim.step()
-            
-
-            actions_np = sample["action"].numpy()
-            actions_np[:,1] = ybound - actions_np[:,1]
-
-            obs_np = sample["observation"].numpy()
-            indicies_flip = [1,3,5,13]
-            indicies_negate = [7,9,11,15]
-
-            obs_np[:,indicies_flip] = ybound - obs_np[:,indicies_flip]
-            obs_np[:,indicies_negate] *= -1
-
-            next_obs_np = sample["next_observation"].numpy()
-            next_obs_np[:,indicies_flip] = ybound - next_obs_np[:,indicies_flip]
-            next_obs_np[:,indicies_negate] *= -1
-
-            next_obs_np = torch.tensor(next_obs_np, dtype=torch.float32)
+            torch.nn.utils.clip_grad_norm_(loss_module.parameters(),1)
+            optimizer.step()
 
             tensordict_data = TensorDict({
-                "action": torch.tensor(actions_np, dtype=torch.float32),
-                "observation": torch.tensor(obs_np, dtype=torch.float32),
-                # Create a nested structure for "next" fields
+                "action": t_action_flip,
+                "observation": t_obs_flip,
                 "next": TensorDict({
-                    "done": sample["done"],
-                    "observation": next_obs_np,
-                    "reward": sample["reward"],
-                    "terminated": sample["terminated"]
+                    "done": t_done.clone().detach(),
+                    "observation": t_next_obs_flip,
+                    "reward": t_reward.clone().detach(),
+                    "terminated": t_done.clone().detach()
                 }, batch_size=[batch_size]),
-                "sample_log_prob": sample["sample_log_prob"]
-            }, batch_size=[batch_size])
+                "sample_log_prob": t_log_prob.clone().detach()
+            }, batch_size=[batch_size]).to('cuda')
 
             advantage_module(tensordict_data)
 
             loss_vals = loss_module(tensordict_data)
             loss_value = (
-                     0.2 * loss_vals["loss_objective"]
-                    + loss_vals["loss_critic"]
-                    + loss_vals["loss_entropy"]
-                )
+                loss_vals["loss_objective"]
+                + loss_vals["loss_critic"]
+                #+ loss_vals["loss_entropy"]
+            )
 
-            # Perform optimization
-            optim.zero_grad()
-            #if np.isnan(loss_value.detach().numpy()):
-            #    print("NAN")
+            optimizer.zero_grad()
             loss_value.backward()
-            torch.nn.utils.clip_grad_norm_(loss_module.parameters(), 1)
-            optim.step()
-            
+            torch.nn.utils.clip_grad_norm_(loss_module.parameters(),1)
+            optimizer.step()
 
-        torch.save(policy_module.state_dict(), "C:\\Users\\hudso\\Downloads\\policy_weights26.pth")
-        torch.save(value_module.state_dict(), "C:\\Users\\hudso\\Downloads\\value_weights26.pth")
-        print((update+1) / 100)
+            """
+            with torch.no_grad():
+                tensor_next_obs = TensorDict({"observation": t_next_obs})
+                policy_module(tensor_next_obs)
+                tensor_next_obs["action"] = tensor_next_obs["action"].float()
+                q1_target_module(tensor_next_obs)
+                q2_target_module(tensor_next_obs)
+                target_Q = torch.squeeze(torch.min(tensor_next_obs["state_action_value_target1"], tensor_next_obs["state_action_value_target2"]))
+                target_Q = (t_reward + torch.logical_not(t_done) * gamma * (target_Q - alpha * tensor_next_obs["sample_log_prob"])).float()
+
+            tensor_obs = TensorDict({"observation": t_obs, "action": t_action})
+            # Get current Q estimates
+            q1_module(tensor_obs)
+            q2_module(tensor_obs)
+
+            q1_loss = mse(torch.squeeze(tensor_obs["state_action_value1"]), target_Q)
+            q1_optimizer.zero_grad()
+            q1_loss.backward()
+            q1_optimizer.step()
+
+            q2_loss = mse(torch.squeeze(tensor_obs["state_action_value2"]), target_Q)
+            q2_optimizer.zero_grad()
+            q2_loss.backward()
+            q2_optimizer.step()
+
+            if update > 1:
+
+                tensor_obs_policy = TensorDict({"observation": t_obs})
+                policy_module(tensor_obs_policy)
+                tensor_obs_policy['action'] = tensor_obs_policy['action'].float()
+
+                q1_module(tensor_obs_policy)
+                q2_module(tensor_obs_policy)
+
+                current_Q = torch.squeeze(torch.min(tensor_obs_policy["state_action_value1"], 
+                                    tensor_obs_policy["state_action_value2"]))
+
+                actor_loss = (alpha * tensor_obs_policy["sample_log_prob"] - current_Q).mean()
+
+                policy_optimizer.zero_grad()
+                actor_loss.backward()
+                policy_optimizer.step()
+
+                alpha_loss = -(log_alpha * (tensor_obs_policy["sample_log_prob"] + target_entropy).detach()).mean()
+                alpha_optimizer.zero_grad()
+                alpha_loss.backward()
+                alpha_optimizer.step()
+                alpha = log_alpha.exp()
+
+            for param, target_param in zip(q1_module.parameters(), q1_target_module.parameters()):
+                target_param.data.copy_(tau * param.data + (1 - tau) * target_param.data)
+
+            for param, target_param in zip(q2_module.parameters(), q2_target_module.parameters()):
+                target_param.data.copy_(tau * param.data + (1 - tau) * target_param.data)
+            """
+
+        torch.save({
+            'policy_state_dict': policy_module.state_dict(),
+            'value_state_dict': value_module.state_dict(),
+            'optim_state_dict': optimizer.state_dict(),
+        }, save_filepath)
+
         """
+        torch.save({
+            'policy_state_dict': policy_module.state_dict(),
+            'q1_state_dict': q1_module.state_dict(),
+            'q2_state_dict': q2_module.state_dict(),
+            'q1_target_state_dict': q1_target_module.state_dict(),
+            'q2_target_state_dict': q2_target_module.state_dict(),
+            'policy_optimizer_state_dict': policy_optimizer.state_dict(),
+            'q1_optimizer_state_dict': q1_optimizer.state_dict(),
+            'q2_optimizer_state_dict': q2_optimizer.state_dict(),
+            'alpha_oe388c35d-c99f-4f45-9e2f-3e229795f7acptimizer_state_dict': alpha_optimizer.state_dict(),
+            'log_alpha': log_alpha,
+        }, save_filepath)
+        """
+        
 
-    print("Done Training")
-
-sim.initalize(envs=1, mallet_r=mallet_r, puck_r=puck_r, goal_w=goal_width, V_max=Vmax)
-Ts = 0.1
-envs = 1
-N = 35
-step_size = Ts/N
-obs = np.empty((2, obs_dim))
-past_obs = np.empty((2,obs_dim))
-attack = np.array([True, False])
-obs[:1, :] = np.concatenate([mallet_init[0], mallet_init[1], puck_init[0], np.zeros((6,)), puck_init[0], np.zeros((2,)), np.array([1.0])])
-obs[1:, :] = np.concatenate([mallet_init[0], mallet_init[1], puck_init[1], np.zeros((6,)), puck_init[1], np.zeros((3,))])
-past_obs[:1, :] = np.concatenate([mallet_init[0], mallet_init[1], puck_init[0], np.zeros((6,)), puck_init[0], np.zeros((2,)), np.array([1.0])])
-past_obs[1:, :] = np.concatenate([mallet_init[0], mallet_init[1], puck_init[1], np.zeros((6,)), puck_init[1], np.zeros((3,))])
-obs = TensorDict({"observation": torch.tensor(obs, dtype=torch.float32)}, batch_size = 2)
-past_obs = TensorDict({"observation": torch.tensor(past_obs, dtype=torch.float32)}, batch_size = 2)
-mallet_pos = np.tile(mallet_init, (1,1,1))
-start_cnt = 0
-theta = 0
-
-left_puck = np.full((1), True)
+#Display
 while True:
-    #choose a random action
-    #policy_out1 = policy_module(TensorDict({"observation": obs["observation"][1:]}))
-    #policy_out2 = policy_module2(TensorDict({"observation": obs["observation"][:1]}))
-    #actions = torch.concatenate([policy_out2["action"].detach(), policy_out1["action"].detach()])
-    #actions_np = actions.numpy()
+    tensor_obs = TensorDict({"observation": torch.tensor(past_obs, dtype=torch.float32)}).to('cuda')
 
-    policy_out = policy_module(obs)
-    actions_np = policy_out["action"].detach().numpy()
+    policy_out = policy_module(tensor_obs)
+    value_out = value_module(tensor_obs)
+    print(value_out["state_value"])
 
-    #values = value_module(obs)["state_value"].detach().numpy()
-    #print("----------")
-    #print(values)
-    #print(attack)
-    #loc = policy_out["loc"].detach().numpy()
-    #scale = policy_out["scale"].detach().numpy()
-    #xf = np.stack([actions_np[:,:2][:1, :], actions_np[:,:2][1:,:]], axis=1)
-    xf = np.stack([actions_np[:1, :2], actions_np[1:,:2]], axis=1)
-    #Vo = np.stack([actions_np[:,2:][:1, :], actions_np[:,2:][1:,:]], axis=1)
-    #Vo = np.full((1, 2, 2), 1)
+    actions = policy_out["action"].detach().to('cpu')
+    policy_out["sample_log_prob"] = torch.maximum(policy_out["sample_log_prob"], torch.tensor(-8, dtype=torch.float32))
+    log_prob = policy_out["sample_log_prob"].detach().to('cpu')
+
+    actions_np = actions.numpy()
+
+    obs[:, 24:28] = past_obs[:, 20:24]
+    obs[:, 28:32] = actions_np
+
+    xf = np.stack([actions_np[:envs, :2], actions_np[envs:,:2]], axis=1)
     xf[:,1,:] = bounds - xf[:,1,:]
-    Vo = np.stack([actions_np[:1, 2:], actions_np[1:,2:]], axis=1)
+
+        #mallet, op mallet
+    for i in range(4):
+        noise_idx = (xf[:,int(i/2),:]*100).astype(np.int16) + noise_seeds[:,2+i%2,:]
+        xf_mallet_noise[:,i] = noise_map[noise_idx[:,0], noise_idx[:,1]]
+    xf[:,0,:] -= xf_mallet_noise[:,:2]
+    xf[:,1,:] += xf_mallet_noise[:,2:]
+
+    xf[:,0,0] = np.clip(xf[:,0,0], mallet_r+1e-4, bounds[0]/2-mallet_r-1e-4)
+    xf[:,1,0] = np.clip(xf[:,1,0], bounds[0]/2+mallet_r+1e-4, bounds[0]-mallet_r-1e-4)
+    xf[:,:,1] = np.clip(xf[:,:,1], mallet_r+1e-4, bounds[1]-mallet_r-1e-4)
+
+    Vo = actions_np[:,2][:, None] * Vmax * np.stack((1+actions_np[:,3], 1-actions_np[:,3]), axis=1)
+    too_low_voltage = np.logical_or(Vo[:,0] < 0.3, Vo[:,1] < 0.3)
+    rewards[too_low_voltage] -= 0.01
+    if too_low_voltage[0]:
+        print("LOW VOLTAGE")
+    Vo = np.stack([Vo[:envs,:], Vo[envs:,:]], axis=1)
 
     sim.take_action(xf, Vo)
-    sim.impulse(0.0185, theta + np.random.uniform(-0.2,0.2))
-    #if start_cnt % 30 == 0:
-    #    theta = np.random.uniform(0, 2*3.14)
-    #start_cnt += 1
-    theta = theta + np.random.uniform(-0.1,0.3)
 
-    #puck_wall_col = np.full((1,2), False)
-    cross_left = np.full((1,), -1.0)
-    cross_right = np.full((1,), -1.0)
+    #midpoint_acc = sim.get_xpp(0.004)
+    #rewards[:envs] += (100 - np.sqrt(np.sum(midpoint_acc[:,0,:]**2, axis=1))) / 100000
+    #rewards[envs:] += (100 - np.sqrt(np.sum(midpoint_acc[:,1,:]**2, axis=1))) / 100000
 
-    env_err = []
-    goals = [0]
-    for i in range(N):
-        mallet_pos, puck_pos, mallet_vel, puck_vel, cross_left_n, cross_right_n = sim.step(step_size)
-        cross_left = np.maximum(cross_left, cross_left_n)
-        cross_right = np.maximum(cross_right, cross_right_n)
-        
-        env_err = sim.check_state()
-        if len(env_err) > 0:
-            #sim.reset_sim(index)
+    #acc_time = sim.get_a()
+    #acc_time = np.concatenate([np.max(acc_time[:,0,:],axis=1), np.max(acc_time[:,1,:],axis=1)])
+    #rewards += np.clip(0.05 - acc_time, -10, 0) / 500
+
+    #on_edge_mask = np.logical_or(np.logical_or(xf[:,0,0] < 0.05, xf[:,0,0] > bounds[0]/2 - 0.05), np.logical_or(xf[:,0,1] < 0.05, xf[:,0,1] > bounds[1] - 0.05))
+    #rewards[:envs][on_edge_mask] -= 0.01
+
+    #on_edge_mask = np.logical_or(np.logical_or(xf[:,1,0] < bounds[0]/2 + 0.05, xf[:,1,0] > bounds[0] - 0.05), np.logical_or(xf[:,1,1] < 0.05, xf[:,1,1] > bounds[1] - 0.05))
+    #rewards[envs:][on_edge_mask] -= 0.01
+
+    while True:
+        img_idx = None
+        next_img = time_from_last_img + camera_period
+        next_mallet = np.inf
+        next_action = np.inf
+        for i in range(camera_buffer_size):
+            if not inference_img.get(i):
+                continue
+
+            sample_mallet = mallet_time.get(i)
+            if sample_mallet < 1e-8:
+                break
+            if sample_mallet < next_mallet:
+                next_mallet = sample_mallet
+
+        for i in range(camera_buffer_size):
+            if not inference_img.get(i):
+                continue
+
+            action_time = agent_actions.get(i)
+            if action_time < 1e-8:
+                break
+            if action_time < next_action:
+                next_action = action_time
+                img_idx = i
+
+
+        if next_img < next_mallet and next_img < next_action:
+            #mallet_pos (mallet, op_mallet)
+            mallet_pos, _, puck_pos, cross_left, cross_right = sim.step(next_img)
+
+            env_err = sim.check_state()
+            entered_left_goal_mask, entered_right_goal_mask = sim.check_goal()
+            if len(env_err) > 0:
+                print("err")
+                print(env_err)
+                for idx in env_err:
+                    dones[idx] = True
+                    dones[envs+idx] = True
+                    rewards[idx] -= -10.0
+                    rewards[envs+idx] -= -10.0
+
+            dones[:envs][entered_left_goal_mask | entered_right_goal_mask] = True
+            dones[envs:][entered_left_goal_mask | entered_right_goal_mask] = True
+
+            rewards[:envs][entered_left_goal_mask] -= 10
+            rewards[:envs][entered_right_goal_mask] += 10
+            rewards[envs:][entered_left_goal_mask] += 10
+            rewards[envs:][entered_right_goal_mask] -= 10
+
+            rewards[:envs] += np.where(cross_right > 0,\
+                            cross_right / 100,\
+                            np.where(cross_right == -0.5, miss_penalty, 0))
+            rewards[envs:] += np.where(cross_left > 0,\
+                            cross_left / 100,\
+                            np.where(cross_left == -0.5, miss_penalty, 0))
+            
+            #actions_since_cross[np.logical_or(cross_left != -1, cross_right != -1)] = 0
+
+            for i in range(2):
+                noise_idx = (puck_pos*100).astype(np.int16) + noise_seeds[:,i,:]
+                noise_idx[:,0] = np.clip(noise_idx[:,0], 0, 1999)
+                noise_idx[:,1] = np.clip(noise_idx[:,1], 0, 999)
+                puck_noise[:,i] = noise_map[noise_idx[:,0], noise_idx[:,1]]
+            puck_pos = np.concatenate([puck_pos + puck_noise, bounds - puck_pos + puck_noise],axis=0)
+
+            #mallet_noise = np.empty((envs, 4)) #mallet, op mallet
+            for i in range(4):
+                noise_idx = (mallet_pos[:,int(i/2),:]*100).astype(np.int16) + noise_seeds[:,2+i%2,:]
+                mallet_noise[:,i] = noise_map[noise_idx[:,0], noise_idx[:,1]]
+            op_mallet_pos = np.concatenate([mallet_pos[:,1,:] + mallet_noise[:,2:], bounds - mallet_pos[:,0,:] + mallet_noise[:,:2]], axis=0)
+            camera_buffer.put(np.concatenate([puck_pos, op_mallet_pos], axis=1))
+
+            time_from_last_img = 0
+            agent_actions.subtract(next_img)
+            mallet_time.subtract(next_img)
+            agent_actions.put(np.clip(np.random.normal(image_delay[0], image_delay[1]), image_delay[2], image_delay[3]))
+            mallet_time.put(agent_actions.get(0) - np.clip(np.random.normal(mallet_delay[0], mallet_delay[1]), mallet_delay[2], mallet_delay[3]))
+
+            inference_img.put(np.logical_not(inference_img.get(0)))
+        elif next_mallet < next_img and next_mallet < next_action:
+            mallet_pos, mallet_vel, _, cross_left, cross_right = sim.step(next_mallet)
+
+            env_err = sim.check_state()
+            entered_left_goal_mask, entered_right_goal_mask = sim.check_goal()
+            if len(env_err) > 0:
+                print("err")
+                print(env_err)
+                for idx in env_err:
+                    dones[idx] = True
+                    dones[envs+idx] = True
+                    rewards[idx] -= -10.0
+                    rewards[envs+idx] -= -10.0
+            dones[:envs][entered_left_goal_mask | entered_right_goal_mask] = True
+            dones[envs:][entered_left_goal_mask | entered_right_goal_mask] = True
+
+            rewards[:envs][entered_left_goal_mask] -= 10
+            rewards[:envs][entered_right_goal_mask] += 10
+            rewards[envs:][entered_left_goal_mask] += 10
+            rewards[envs:][entered_right_goal_mask] -= 10
+
+            rewards[:envs] += np.where(cross_right > 0,\
+                            cross_right / 100,\
+                            np.where(cross_right == -0.5, miss_penalty, 0))
+            rewards[envs:] += np.where(cross_left > 0,\
+                            cross_left / 100,\
+                            np.where(cross_left == -0.5, miss_penalty, 0))
+            
+            #actions_since_cross[np.logical_or(cross_left!=-1, cross_right!=-1)] = 0
+
+            #mallet_noise = np.empty((envs, 4)) #mallet, op mallet
+            for i in range(4):
+                noise_idx = (mallet_pos[:,int(i/2),:]*100).astype(np.int16) + noise_seeds[:,2+i%2,:]
+                mallet_noise[:,i] = noise_map[noise_idx[:,0], noise_idx[:,1]]
+            #(2*envs, 2)
+            obs[:,20:22] = np.concatenate([mallet_pos[:,0,:] + mallet_noise[:,:2], bounds - mallet_pos[:,1,:] + mallet_noise[:,2:]], axis=0)
+            vel_noise = np.random.uniform(mallet_vel_noise[0], mallet_vel_noise[1], size=(envs,2,2))
+            obs[:,22:24] = np.concatenate([mallet_vel[:,0,:] + vel_noise[:,0,:], -mallet_vel[:,1,:] + vel_noise[:,1,:]], axis=0)
+            
+            time_from_last_img -= next_mallet
+            agent_actions.subtract(next_mallet)
+            mallet_time.subtract(next_mallet)
+
+        elif next_action < next_img and next_action < next_mallet:
+            _, _, puck_pos, cross_left, cross_right = sim.step(next_action)
+
+            env_err = sim.check_state()
+            entered_left_goal_mask, entered_right_goal_mask = sim.check_goal()
+            if len(env_err) > 0:
+                print("err")
+                print(env_err)
+                for idx in env_err:
+                    dones[idx] = True
+                    dones[envs+idx] = True
+                    rewards[idx] -= -10.0
+                    rewards[envs+idx] -= -10.0
+            dones[:envs][entered_left_goal_mask | entered_right_goal_mask] = True
+            dones[envs:][entered_left_goal_mask | entered_right_goal_mask] = True
+
+            rewards[:envs][entered_left_goal_mask] -= 10
+            rewards[:envs][entered_right_goal_mask] += 10
+            rewards[envs:][entered_left_goal_mask] += 10
+            rewards[envs:][entered_right_goal_mask] -= 10
+
+            rewards[:envs] += np.where(cross_right > 0,\
+                            cross_right / 100,\
+                            np.where(cross_right == -0.5, miss_penalty, 0))
+            rewards[envs:] += np.where(cross_left > 0,\
+                            cross_left / 100,\
+                            np.where(cross_left == -0.5, miss_penalty, 0))
+            
+            puck_left = puck_pos[:,0] < (bounds[0]/2)
+            obs[:envs,-1][puck_left] += 1/(1*60)
+            obs[:envs,-1][np.logical_not(puck_left)] = 0
+            obs[envs:,-1][np.logical_not(puck_left)] += 1/(1*60)
+            obs[envs:,-1][puck_left] = 0
+
+            #actions_since_cross[np.logical_or(cross_left!=-1, cross_right!=-1)] = 0
+
+            # (2*envs, 20)
+            camera_obs = camera_buffer.get(indices=[img_idx, img_idx+1, img_idx+2, img_idx+5, img_idx+11])
+            obs[:,:20] = camera_obs
+
+            time_from_last_img -= next_action
+            agent_actions.subtract(next_action)
+            mallet_time.subtract(next_action)
+
             break
 
-        goals = sim.check_goal() #returns 1 or -1 depending on what agent scored a goal
-        if goals[0] != 0:
-            break
-
-        sim.display_state(0)
+    timer_reset = np.logical_or(obs[:envs,-1] > 0.999, obs[envs:,-1] > 0.999)
+    if np.any(timer_reset):
+        pass
+    dones[:envs][timer_reset] = True
+    dones[envs:][timer_reset] = True
+    rewards[obs[:,-1] > 0.999] -= 10.0
+    obs[:envs][timer_reset] = 0
+    obs[envs:][timer_reset] = 0
     
-    puck_pos_noM, puck_vel_noM = sim.step_noM(Ts*2)
+    sim.display_state(0)
 
-    attack_copy = np.copy(attack)
+    #actions_since_cross += 1
+    #actions_since_cross[dones[:envs]] = 0
+    #too_long_reset = actions_since_cross > 60*4
+    #actions_since_cross[too_long_reset] = 0
+    #dones[:envs][too_long_reset] = True
+    #dones[envs:][too_long_reset] = True
 
-    dones = np.full((2*envs), False)
-    rewards = np.zeros((2*envs))
+    num_resets = int(np.sum(dones) / 2)
 
-    #Shooting reward
-    dones[:envs] = np.logical_or(cross_right > 0, cross_right == -0.5)
-    dones[envs:] = np.logical_or(cross_left > 0, cross_left == -0.5)
+    if num_resets > 0:
+        coll_vars = np.empty((num_resets, 14))
 
-    attack_copy[dones] = False
+        # Independent samples
+        coll_vars[:, [0, 7]] = np.random.uniform(e_ni[0], e_ni[1], (num_resets, 2))    # e_ni
+        coll_vars[:, [1, 8]] = np.random.uniform(e_nr[0], e_nr[1], (num_resets, 2))      # e_nr  
+        coll_vars[:, [6, 13]] = np.random.uniform(e_std[0], e_std[1], (num_resets, 2))    # e_std
 
-    rewards[:envs] += np.where(cross_right > 0,\
-                         np.where(attack[:envs], np.maximum(cross_right,0)/60, np.sqrt(np.maximum(cross_right,0))/120),\
-                         np.where((cross_right == -0.5) and (np.logical_not(attack[:envs])), -0.3, 0))
-    rewards[envs:] += np.where(cross_left > 0,\
-                         np.where(attack[envs:], np.maximum(cross_left, 0)/60, np.sqrt(np.maximum(cross_left, 0))/120),\
-                         np.where((cross_left == -0.5) and (np.logical_not(attack[envs:])), -0.3, 0))
+        # Dependent samples
+        coll_vars[:, [2, 9]] = np.random.uniform(e_nf, coll_vars[:, [0, 7]])  # e_nf
+        coll_vars[:, [3, 10]] = np.random.uniform(e_ti, coll_vars[:, [0, 7]]) # e_ti
+        coll_vars[:, [4, 11]] = np.random.uniform(coll_vars[:, [1, 8]], e_nr[1]) # e_tr
+        coll_vars[:, [5, 12]] = np.random.uniform(e_nf, coll_vars[:, [2, 9]]) # e_tf
 
-    #print(rewards)
-    env_err = sim.check_state()
+        ab_vars = np.random.uniform(
+                low=ab_ranges[:, 0].reshape(1, 1, 5),    # Shape: (1, 1, 5)
+                high=ab_ranges[:, 1].reshape(1, 1, 5),   # Shape: (1, 1, 5)
+                size=(num_resets, 2, 5)                     # Output shape
+            )
 
-    if len(env_err) > 0:
-        sim.reset_sim(env_err)
-        for idx in env_err:
-            mallet_pos[idx] = mallet_init
-            puck_pos[idx] = puck_init[0]
-            mallet_vel[idx,:,:] = 0.0
-            puck_vel[idx,:] = 0.0
-            puck_pos_noM[idx] = puck_init[0]
-            puck_vel_noM[idx,:] = 0.0
-            rewards[idx] = -1
-            rewards[envs+idx] = -1
-            dones[idx] = True
-            dones[idx+envs] = True
+        ab_vars *= np.random.uniform(0.8, 1.3, size=(num_resets, 2, 1))
 
-    for idx in range(envs):
-        if goals[idx] == 1:
-            rewards[idx+envs] = -1
+        ab_obs = np.zeros((2*num_resets, 5))
+            
+        ab_obs[:num_resets, :] = (ab_vars[:,0,:] / pullyR) * ab_obs_scaling[:]
+        ab_obs[num_resets:, :] = (ab_vars[:,1,:] / pullyR) * ab_obs_scaling[:]
 
-        elif goals[idx] == -1:
-            rewards[idx] = -1
+        obs[dones] = np.concatenate([obs_init[dones], np.tile(coll_vars, (2,1)), ab_obs, np.zeros((2*num_resets, 1))], axis=1)
 
-        if goals[idx] != 0:
-            dones[idx] = True
-            dones[idx+envs] = True
-            mallet_pos[idx,:,:] = mallet_init
-            mallet_vel[idx,:,:] = 0.0
-            puck_pos[idx] = puck_init[0]
-            puck_vel[idx,:] = 0.0
-            puck_pos_noM[idx] = puck_init[0]
-            puck_vel_noM[idx,:] = 0.0
-            attack_copy[idx] = True
-            attack_copy[idx+envs] = False
+        camera_buffer.reset(np.where(dones)[0])
 
-    #Energy Penalty
-    past_mallet = obs["observation"].numpy()[:, :2]
-    past_mallet[envs:] = bounds - past_mallet[envs:]
-    new_dist = np.sqrt(np.sum((past_mallet - np.concatenate([xf[:,0,:], xf[:,1,:]]))**2,axis=1))
+        sim.reset_sim(np.where(dones[:envs])[0], coll_vars, ab_vars)
 
-    voltage = np.concatenate([actions_np[:envs, 2:], actions_np[envs:,2:]])
-    voltage_cost = np.sqrt(np.sum(voltage**2, axis=1))
-
-    rewards += -new_dist / 50 - voltage_cost / 1200
-
-    #Near edge penalty
-    new_dist = np.max(np.abs(np.concatenate([puck_init[0] - xf[:,0,:], puck_init[1] - xf[:,1,:]])),axis=1)
-    rewards += np.where(new_dist > 0.44, -0.1, 0)
-
-    #Stabalization
-    dist_L = np.sqrt(np.sum((puck_pos - np.array([0.65,0.5]))**2, axis=1))
-    dist_R = np.sqrt(np.sum((puck_pos - np.array([1.35, 0.5]))**2, axis=1))
-
-    left_puck = (puck_pos[:,0] < xbound/2)
-    rewards[~attack_copy] -= 0.001
-
-    vel_norm = np.linalg.norm(puck_vel, axis=1)
-
-    stabalized_l = ~attack_copy[:envs] & left_puck & (vel_norm > 0.3) & (np.abs(puck_vel[:,1])/np.maximum(np.abs(puck_vel[:,0]), 0.001) > 2) & (np.abs(puck_pos[:,0] - 0.65) < 0.3)
-    #stabalized_l = stabalized_l & np.random.choice([False, True], size=envs, p=[0.3, 0.7])
-    stabalized_r = ~attack_copy[envs:] & ~left_puck & (vel_norm > 0.3) & (np.abs(puck_vel[:,1])/np.maximum(np.abs(puck_vel[:,0]), 0.001) > 2) & (np.abs(puck_pos[:,0] - 1.35) < 0.3)
-    #stabalized_r = stabalized_r & np.random.choice([False, True], size=envs, p=[0.3, 0.7])
-    stabalized = np.concatenate([stabalized_l, stabalized_r])
-
-    dones[stabalized] = True
-    attack_copy[stabalized] = True
-
-    rewards[:envs][stabalized_l] += 2.0
-    rewards[envs:][stabalized_r] += 2.0
-
-    #print(rewards)
-
-    attack = attack_copy
-    #attack[:] = True
-
-    #print(rewards)
-
-    #print("---")
-    #print(dones)
-    #print(rewards)
-    #print(attack)
-    #time.sleep(1)
-
-    next_obs = np.empty((2*envs, obs_dim))
-    next_obs[:envs,:] = np.concatenate([mallet_pos[:,0,:], mallet_pos[:,1,:], puck_pos, mallet_vel[:,0,:], mallet_vel[:,1,:], puck_vel, puck_pos_noM, puck_vel_noM, attack[:envs].reshape(-1, 1)], axis=1) #(game, 12)
-    #puck_pos += np.array([np.random.uniform(-0.004, 0.004), np.random.uniform(-0.004, 0.004)])
-    next_obs[envs:,:] = np.concatenate([bounds - mallet_pos[:,1,:], bounds - mallet_pos[:,0,:], bounds - puck_pos, -mallet_vel[:,1,:], -mallet_vel[:,0,:], -puck_vel, bounds - puck_pos_noM, -puck_vel_noM, attack[envs:].reshape(-1,1)], axis=1)
-
-    pos_range = (-0.02, 0.02)  # Range for position (x and y)
-    vel_range = (-0.05, 0.05)  # Range for velocity
-
-    # Create random perturbations for position and velocity
-    pos_perturb = np.random.uniform(pos_range[0], pos_range[1], next_obs[:, :2].shape)
-    vel_perturb = np.random.uniform(vel_range[0], vel_range[1], next_obs[:, 2:4].shape)
-
-    # Add the random perturbations to positions and velocities
-    next_obs[:envs, :2] += pos_perturb[:envs]
-    next_obs[:envs, 2:4] += vel_perturb[:envs]
-    next_obs[envs:, :2] += pos_perturb[envs:]
-    next_obs[envs:, 2:4] += vel_perturb[envs:]
-
-    past_obs = obs
-    obs = TensorDict({"observation": torch.tensor(next_obs, dtype=torch.float32)}, batch_size=2)
-
-    #TODO
-    """
-    Remove velocity calculations, give model the puck position directly
-    - Generate perlin nosie for random offset map for each env
-    - Decide time interval between samples we want to give the model
-    - Use same perlin noise to offset opponent mallet as well
-
-    Have each env include randomly generated mallet movement parameters
-    - Each parameter modeled with a polynomial characterising how it changes with diff voltage levels
-    - Give these parameters into the model as well
-
-    Alter how the puck moves
-    - Randomize the puck motion parameters across each env (don't give parameters to the model)
-    - Randomize tangential and normal restitution coefficients and add variance whenever appling them, give to model
-
-    Adding delay
-    - randomize mean and variance of the delay for each env, give the model the mean and variance
-    
-    """
+    past_obs = obs.copy()
+    dones[:] = False
+    rewards[:] = 0

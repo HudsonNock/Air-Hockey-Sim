@@ -18,8 +18,8 @@ from perlin_numpy import generate_perlin_noise_2d
 from torchrl.data.tensor_specs import BoundedTensorSpec, CompositeSpec
 import copy
 
-load_filepath = "checkpoints\\model_01.pth"
-save_filepath = "checkpoints\\model_01.pth"
+load_filepath = "checkpoints/model_02.pth"
+save_filepath = "checkpoints/model_02.pth"
 train = False
 # Simulation parameters
 obs_dim = 52 #[puck_pos, opp_mallet_pos] #guess mean low stdl
@@ -51,12 +51,14 @@ width = 0.9905
 bounds = np.array([height, width])
 goal_width = 0.254
 
-entropy_coeff = 0.0002
-epsilon = 0.01
-gamma = 0.997
-lmbda = 0.6
-lr_optim = 3e-4
-batch_size = 1024
+entropy_coeff = 0.00024
+epsilon = 0.05
+gamma = 1.0
+lmbda = 0.5
+lr_policy = 5e-4
+lr_value = 5e-4
+batch_size = 2048
+horizon = 60*1
 
 class ScaledNormalParamExtractor(NormalParamExtractor):
     def __init__(self, scale_factor=0.8):
@@ -81,9 +83,93 @@ class ReplayBuffer:
         sampled_transitions = [self.buffer[i] for i in indices]
         return sampled_transitions
     
-scale_factor = 0.4
+scale_factor = 0.5
 if not train:
-    scale_factor = 0.1
+    scale_factor = 0.8
+"""
+class PolicyDense(nn.Module):
+    def __init__(self, obs_dim, action_dim, scale_factor=0.8):
+        super().__init__()
+        self.scale_factor = scale_factor
+        self.input_layer = nn.Sequential(
+            nn.Linear(obs_dim, 256),
+            nn.LayerNorm(256),
+            nn.ReLU()
+        )
+
+        self.dense1 = nn.Sequential(
+            nn.Linear(obs_dim + 256, 256),
+            nn.LayerNorm(256),
+            nn.ReLU()
+        )
+
+        self.dense2 = nn.Sequential(
+            nn.Linear(obs_dim + 256 * 2, 256),
+            nn.LayerNorm(256),
+            nn.ReLU()
+        )
+
+        self.dense3 = nn.Sequential(
+            nn.Linear(obs_dim + 256 * 3, 128),
+            nn.LayerNorm(128),
+            nn.ReLU()
+        )
+
+        self.output_layer = nn.Linear(obs_dim + 256 * 3 + 128, action_dim * 2)
+        self.param_extractor = ScaledNormalParamExtractor(scale_factor=scale_factor)
+
+    def forward(self, obs):
+        x0 = self.input_layer(obs)                    # -> (batch, 256)
+        x1 = self.dense1(torch.cat([obs, x0], dim=-1))  # -> (batch, 256)
+        x2 = self.dense2(torch.cat([obs, x0, x1], dim=-1))  # -> (batch, 256)
+        x3 = self.dense3(torch.cat([obs, x0, x1, x2], dim=-1))  # -> (batch, 128)
+
+        x_all = torch.cat([obs, x0, x1, x2, x3], dim=-1)  # Final concat
+        x_out = self.output_layer(x_all)
+
+        return self.param_extractor(x_out)
+
+class ValueDense(nn.Module):
+    def __init__(self, obs_dim):
+        super().__init__()
+        self.scale_factor = scale_factor
+        self.input_layer = nn.Sequential(
+            nn.Linear(obs_dim, 256),
+            nn.LayerNorm(256),
+            nn.ReLU()
+        )
+
+        self.dense1 = nn.Sequential(
+            nn.Linear(obs_dim + 256, 256),
+            nn.LayerNorm(256),
+            nn.ReLU()
+        )
+
+        self.dense2 = nn.Sequential(
+            nn.Linear(obs_dim + 256 * 2, 256),
+            nn.LayerNorm(256),
+            nn.ReLU()
+        )
+
+        self.dense3 = nn.Sequential(
+            nn.Linear(obs_dim + 256 * 3, 128),
+            nn.LayerNorm(128),
+            nn.ReLU()
+        )
+
+        self.output_layer = nn.Linear(obs_dim + 256 * 3 + 128, 1)
+
+    def forward(self, obs):
+        x0 = self.input_layer(obs)                    # -> (batch, 256)
+        x1 = self.dense1(torch.cat([obs, x0], dim=-1))  # -> (batch, 256)
+        x2 = self.dense2(torch.cat([obs, x0, x1], dim=-1))  # -> (batch, 256)
+        x3 = self.dense3(torch.cat([obs, x0, x1, x2], dim=-1))  # -> (batch, 128)
+
+        x_all = torch.cat([obs, x0, x1, x2, x3], dim=-1)  # Final concat
+        x_out = self.output_layer(x_all)
+
+        return x_out
+"""
 
 policy_net = nn.Sequential(
     nn.Linear(obs_dim, 1024),
@@ -102,6 +188,24 @@ policy_net = nn.Sequential(
     nn.Linear(128, action_dim * 2),
     ScaledNormalParamExtractor(scale_factor=scale_factor),
 )
+#policy_net = PolicyDense(obs_dim, action_dim, scale_factor)
+
+action_center = torch.tensor([0, 0, 2, 0], dtype=torch.float32)
+
+def init_policy(m):
+    if isinstance(m, nn.Linear):
+        if m.out_features == action_dim * 2:
+            # Initialize weights to 0 so output = bias
+            nn.init.constant_(m.weight, 0.0)
+            # Bias: loc = center, log_std = 0
+            bias = torch.cat([action_center, torch.ones(action_dim)*2], dim=0)
+            with torch.no_grad():
+                m.bias.copy_(bias)
+        else:
+            nn.init.kaiming_uniform_(m.weight, nonlinearity='relu')
+            nn.init.zeros_(m.bias)
+
+policy_net.apply(init_policy)
 
 policy_module = TensorDictModule(
     policy_net, in_keys=["observation"], out_keys=["loc", "scale"]
@@ -112,78 +216,14 @@ policy_module = ProbabilisticActor(
     in_keys=["loc", "scale"],
     distribution_class=TanhNormal,
     distribution_kwargs={
-        "low": torch.tensor([mallet_r, mallet_r, 0, -1]),
-        "high": torch.tensor([bounds[0]/2-mallet_r, bounds[1] - mallet_r, 1, 1]), 
+        "low": torch.tensor([mallet_r+0.011, mallet_r+0.011, 0, -1], dtype=torch.float32),
+        "high": torch.tensor([bounds[0]/2-mallet_r-0.011, bounds[1] - mallet_r-0.011, 1, 1], dtype=torch.float32), 
     },
     default_interaction_type=tensordict.nn.InteractionType.RANDOM,
     return_log_prob=True,
 ).to('cuda')
 
-"""
-q1_net = nn.Sequential(
-    nn.Linear(obs_dim + action_dim, 1024),
-    nn.LayerNorm(1024),
-    nn.ReLU(),
-    nn.Linear(1024, 1024),
-    nn.LayerNorm(1024),
-    nn.ReLU(),
-    nn.Linear(1024, 512),
-    nn.LayerNorm(512),
-    nn.ReLU(),
-    nn.Linear(512, 256),
-    nn.ReLU(),
-    nn.Linear(256, 128),
-    nn.ReLU(),
-    nn.Linear(128, 1)
-)
-
-q2_net = nn.Sequential(
-    nn.Linear(obs_dim + action_dim, 1024),
-    nn.LayerNorm(1024),
-    nn.ReLU(),
-    nn.Linear(1024, 1024),
-    nn.LayerNorm(1024),
-    nn.ReLU(),
-    nn.Linear(1024, 512),
-    nn.LayerNorm(512),
-    nn.ReLU(),
-    nn.Linear(512, 256),
-    nn.ReLU(),
-    nn.Linear(256, 128),
-    nn.ReLU(),
-    nn.Linear(128, 1)
-)
-
-class QNetwork(nn.Module):
-    def __init__(self, network):
-        super().__init__()
-        self.network = network
-    
-    def forward(self, observation, action):
-        # Concatenate observation and action
-        x = torch.cat([observation, action], dim=-1)
-        return self.network(x)
-
-q1_module = TensorDictModule(
-    QNetwork(q1_net), in_keys=["observation", "action"], out_keys=["state_action_value1"]
-).to('cuda')
-
-q2_module = TensorDictModule(
-    QNetwork(q2_net), in_keys=["observation", "action"], out_keys=["state_action_value2"]
-).to('cuda')
-
-q1_target = copy.deepcopy(q1_net)
-q2_target = copy.deepcopy(q2_net)
-
-q1_target_module = TensorDictModule(
-    QNetwork(q1_target), in_keys=["observation", "action"], out_keys=["state_action_value_target1"]
-).to('cuda')
-
-q2_target_module = TensorDictModule(
-    QNetwork(q2_target), in_keys=["observation", "action"], out_keys=["state_action_value_target2"]
-).to('cuda')
-"""
-
+#value_net = ValueDense(obs_dim)
 value_net = nn.Sequential(
     nn.Linear(obs_dim, 1024),
     nn.LayerNorm(1024),
@@ -198,8 +238,10 @@ value_net = nn.Sequential(
     nn.ReLU(),
     nn.Linear(256, 128),
     nn.ReLU(),
-    nn.Linear(128, 1)
+    nn.Linear(128, 1),
 )
+
+value_net.apply(init_policy)
 
 value_module = ValueOperator(
     module=value_net,
@@ -215,47 +257,19 @@ loss_module = ClipPPOLoss(
     actor_network=policy_module,
     critic_network=value_module,
     clip_epsilon=epsilon,
-    entropy_bonus=False, 
+    entropy_bonus=True, 
     entropy_coef=entropy_coeff,
     ).to('cuda')
 
-#target_entropy = -action_dim
-#log_alpha = torch.tensor(np.log(alpha), dtype=float, requires_grad=True, device='cuda')
-
-#policy_optimizer = optim.Adam(policy_module.parameters(), lr=lr_policy)
-#q1_optimizer = optim.Adam(q1_module.parameters(), lr=lr_critic)
-#q2_optimizer = optim.Adam(q2_module.parameters(), lr=lr_critic)
-#alpha_optimizer = torch.optim.Adam([log_alpha], lr=lr_alpha)
-#mse = nn.MSELoss()
-
-optimizer = torch.optim.Adam(loss_module.parameters(), lr=lr_optim)
+policy_optimizer = torch.optim.Adam(policy_module.parameters(), lr=lr_policy)
+value_optimizer = torch.optim.Adam(value_module.parameters(), lr=lr_value)
 
 if load_filepath is not None:
     checkpoint = torch.load(load_filepath, map_location='cuda')
     policy_module.load_state_dict(checkpoint['policy_state_dict'])
     value_module.load_state_dict(checkpoint['value_state_dict'])
-    optimizer.load_state_dict(checkpoint['optim_state_dict'])
-    
-    """
-    policy_module.load_state_dict(checkpoint['policy_state_dict'])
-    q1_module.load_state_dict(checkpoint['q1_state_dict'])
-    q2_module.load_state_dict(checkpoint['q2_state_dict'])
-    q1_target_module.load_state_dict(checkpoint['q1_target_state_dict'])
-    q2_target_module.load_state_dict(checkpoint['q2_target_state_dict'])
-    log_alpha = checkpoint['log_alpha']
-    
-    policy_optimizer.load_state_dict(checkpoint['policy_optimizer_state_dict'])
-    q1_optimizer.load_state_dict(checkpoint['q1_optimizer_state_dict'])
-    q2_optimizer.load_state_dict(checkpoint['q2_optimizer_state_dict'])
-    alpha_optimizer.load_state_dict(checkpoint['alpha_optimizer_state_dict'])
-    log_alpha = checkpoint['log_alpha']
-    """
-
-#for p in q1_target_module.parameters():
-#    p.requires_grad = False
-
-#for p in q2_target_module.parameters():
-#    p.requires_grad = False
+    policy_optimizer.load_state_dict(checkpoint['optim_policy_state_dict'])
+    value_optimizer.load_state_dict(checkpoint['optim_value_state_dict'])
 
 envs = 2048 #2048
 if not train:
@@ -265,12 +279,16 @@ if not train:
 mallet_init = np.array([[0.25, 0.5], [0,0]])
 mallet_init[1] = bounds - mallet_init[0]
 
-puck_init = np.array([[0.25+mallet_r+2*puck_r, bounds[0]/2-2*puck_r],[2*puck_r,bounds[1]-2*puck_r]])
-puck_pos = np.random.uniform(
-    low=puck_init[:, 0], 
-    high=puck_init[:, 1], 
-    size=(envs, 2)
-)
+puck_init = np.array([[2*puck_r, bounds[0]/2-2*puck_r],[2*puck_r,bounds[1]-2*puck_r]])
+puck_pos = []
+while len(puck_pos) < envs:
+    samples_needed = envs - len(puck_pos)
+    samples = np.random.uniform(puck_init[:,0], puck_init[:,1], size=(samples_needed * 2, 2))
+    dists = np.linalg.norm(samples - mallet_init[0], axis=1)
+    valid_samples = samples[dists > mallet_r + 2*puck_r]
+    puck_pos.extend(valid_samples[:samples_needed])
+
+puck_pos = np.array(puck_pos[:envs])
 
 obs = np.empty((2*envs, obs_dim))
 
@@ -370,8 +388,8 @@ obs[:envs, :] = np.concatenate([np.tile(np.concatenate([puck_pos+puck_noise,
                                 np.random.rand(envs, 1),
                                 np.random.rand(envs, 1)*2 - 1,
                                 coll_vars,
-                                ab_obs[:envs, :], 
-                                np.zeros((envs, 1))], axis=1)
+                                ab_obs[:envs, :],
+                                np.random.random((envs,1))], axis=1)
 
 obs[envs:, :] = np.concatenate([np.tile(np.concatenate([bounds-puck_pos+puck_noise,
                                     np.full((envs,2), mallet_init[1])+mallet_noise[:,:2]], axis=1), (5,)),
@@ -384,7 +402,7 @@ obs[envs:, :] = np.concatenate([np.tile(np.concatenate([bounds-puck_pos+puck_noi
                                 np.random.rand(envs, 1)*2 - 1,
                                 coll_vars,
                                 ab_obs[envs:, :],
-                                np.zeros((envs, 1))], axis=1)
+                                np.random.random((envs,1))], axis=1)
 
 past_obs = obs.copy()
 obs_init = obs[:,:len(obs[0])-20].copy()
@@ -542,12 +560,12 @@ dones = np.zeros((2*envs,), dtype=np.bool_)
 rewards = np.zeros((2*envs,))
 
 xf_mallet_noise = np.empty((envs, 4))
-miss_penalty = 0.5
+miss_penalty = 5.0
 actions_since_cross = np.zeros((envs,), dtype=np.int32)
 
 if train:
 
-    buffer_size = 500_000
+    buffer_size = 50_000
     replay_buffer = TensorDictReplayBuffer(
         storage=LazyTensorStorage(buffer_size)
     )
@@ -556,7 +574,7 @@ if train:
     for update in range(500000):  # Training loop
         print(update)
         print("simulating...")
-        for timestep in range(122):
+        for timestep in range(13):
             tensor_obs = TensorDict({"observation": torch.tensor(past_obs, dtype=torch.float32)}).to('cuda')
 
             policy_out = policy_module(tensor_obs)
@@ -585,31 +603,31 @@ if train:
 
             Vo = actions_np[:,2][:, None] * Vmax * np.stack((1+actions_np[:,3], 1-actions_np[:,3]), axis=1)
             too_low_voltage = np.logical_or(Vo[:,0] < 0.3, Vo[:,1] < 0.3)
-            rewards[too_low_voltage] -= 0.01
+            rewards[too_low_voltage] -= 0.5
             if too_low_voltage[0]:
                 print("LOW VOLTAGE")
             Vo = np.stack([Vo[:envs,:], Vo[envs:,:]], axis=1)
 
             sim.take_action(xf, Vo)
 
-            #midpoint_acc = sim.get_xpp(0.004)
-            #rewards[:envs] += (100 - np.sqrt(np.sum(midpoint_acc[:,0,:]**2, axis=1))) / 100000
-            #rewards[envs:] += (100 - np.sqrt(np.sum(midpoint_acc[:,1,:]**2, axis=1))) / 100000
+            midpoint_acc = sim.get_xpp(0.004)
+            rewards[:envs] -= np.sqrt(np.sum(midpoint_acc[:,0,:]**2, axis=1)) / 1000
+            rewards[envs:] -= np.sqrt(np.sum(midpoint_acc[:,1,:]**2, axis=1)) / 1000
 
             #acc_time = sim.get_a()
             #acc_time = np.concatenate([np.max(acc_time[:,0,:],axis=1), np.max(acc_time[:,1,:],axis=1)])
-            #rewards += np.clip(0.05 - acc_time, -10, 0) / 500
+            #rewards += np.clip(0.05 - acc_time, -10, 0) / 5000
 
-            on_edge_mask = np.logical_or(np.logical_or(xf[:,0,0] < 0.01+mallet_r, xf[:,0,0] > bounds[0]/2-mallet_r - 0.01), np.logical_or(xf[:,0,1] < mallet_r + 0.01, xf[:,0,1] > bounds[1]-mallet_r - 0.01))
-            rewards[:envs][on_edge_mask] -= 0.01
+            #on_edge_mask = np.logical_or(np.logical_or(xf[:,0,0] < 0.02+mallet_r, xf[:,0,0] > bounds[0]/2-mallet_r - 0.02), np.logical_or(xf[:,0,1] < mallet_r + 0.02, xf[:,0,1] > bounds[1]-mallet_r - 0.02))
+            #rewards[:envs][on_edge_mask] -= 0.01
 
-            on_edge_mask = np.logical_or(np.logical_or(xf[:,1,0] < bounds[0]/2+mallet_r + 0.01, xf[:,1,0] > bounds[0] -mallet_r- 0.01), np.logical_or(xf[:,1,1] < mallet_r+0.01, xf[:,1,1] > bounds[1]-mallet_r - 0.01))
-            rewards[envs:][on_edge_mask] -= 0.01
+            #on_edge_mask = np.logical_or(np.logical_or(xf[:,1,0] < bounds[0]/2+mallet_r + 0.02, xf[:,1,0] > bounds[0] -mallet_r- 0.02), np.logical_or(xf[:,1,1] < mallet_r+0.02, xf[:,1,1] > bounds[1]-mallet_r - 0.02))
+            #rewards[envs:][on_edge_mask] -= 0.01
 
             #puck_left = obs[:envs,0] < bounds[0]/2
 
-            #rewards[:envs] += 0.05*(np.linalg.norm(xf[:,0,:] - obs[:envs,:2], axis=1) < 0.1)
-            #rewards[envs:] += 0.05*(np.linalg.norm(xf[:,1,:] - obs[envs:,:2], axis=1) < 0.1)
+            rewards[:envs] += np.where(np.linalg.norm(actions_np[:envs,:2] - obs[:envs,:2], axis=1) < 0.1, 1, 0)
+            rewards[envs:] += np.where(np.linalg.norm(actions_np[envs:,:2] - obs[envs:,:2], axis=1) < 0.1, 1, 0)
 
             #print(rewards[0])
 
@@ -652,25 +670,25 @@ if train:
                         for idx in env_err:
                             dones[idx] = True
                             dones[envs+idx] = True
-                            rewards[idx] -= -10.0
-                            rewards[envs+idx] -= -10.0
+                            rewards[idx] -= -100.0
+                            rewards[envs+idx] -= -100.0
 
                     dones[:envs][entered_left_goal_mask | entered_right_goal_mask] = True
                     dones[envs:][entered_left_goal_mask | entered_right_goal_mask] = True
 
-                    rewards[:envs][entered_left_goal_mask] -= 10
-                    rewards[:envs][entered_right_goal_mask] += 10
-                    rewards[envs:][entered_left_goal_mask] += 10
-                    rewards[envs:][entered_right_goal_mask] -= 10
+                    rewards[:envs][entered_left_goal_mask] -= 100
+                    rewards[:envs][entered_right_goal_mask] += 100
+                    rewards[envs:][entered_left_goal_mask] += 100
+                    rewards[envs:][entered_right_goal_mask] -= 100
 
                     rewards[:envs] += np.where(cross_right > 0,\
-                                    cross_right / 100,\
+                                    cross_right / 2,\
                                     np.where(cross_right == -0.5, miss_penalty, 0))
                     rewards[envs:] += np.where(cross_left > 0,\
-                                    cross_left / 100,\
+                                    cross_left / 2,\
                                     np.where(cross_left == -0.5, miss_penalty, 0))
                     
-                    #actions_since_cross[np.logical_or(cross_left != -1, cross_right != -1)] = 0
+                    actions_since_cross[np.logical_or(cross_left != -1, cross_right != -1)] = 0
 
                     for i in range(2):
                         noise_idx = (puck_pos*100).astype(np.int16) + noise_seeds[:,i,:]
@@ -704,24 +722,24 @@ if train:
                         for idx in env_err:
                             dones[idx] = True
                             dones[envs+idx] = True
-                            rewards[idx] -= -10.0
-                            rewards[envs+idx] -= -10.0
+                            rewards[idx] -= -100.0
+                            rewards[envs+idx] -= -100.0
                     dones[:envs][entered_left_goal_mask | entered_right_goal_mask] = True
                     dones[envs:][entered_left_goal_mask | entered_right_goal_mask] = True
 
-                    rewards[:envs][entered_left_goal_mask] -= 10
-                    rewards[:envs][entered_right_goal_mask] += 10
-                    rewards[envs:][entered_left_goal_mask] += 10
-                    rewards[envs:][entered_right_goal_mask] -= 10
+                    rewards[:envs][entered_left_goal_mask] -= 100
+                    rewards[:envs][entered_right_goal_mask] += 100
+                    rewards[envs:][entered_left_goal_mask] += 100
+                    rewards[envs:][entered_right_goal_mask] -= 100
 
                     rewards[:envs] += np.where(cross_right > 0,\
-                                    cross_right / 100,\
+                                    cross_right / 2,\
                                     np.where(cross_right == -0.5, miss_penalty, 0))
                     rewards[envs:] += np.where(cross_left > 0,\
-                                    cross_left / 100,\
+                                    cross_left / 2,\
                                     np.where(cross_left == -0.5, miss_penalty, 0))
                     
-                    #actions_since_cross[np.logical_or(cross_left!=-1, cross_right!=-1)] = 0
+                    actions_since_cross[np.logical_or(cross_left!=-1, cross_right!=-1)] = 0
 
                     #mallet_noise = np.empty((envs, 4)) #mallet, op mallet
                     for i in range(4):
@@ -747,30 +765,34 @@ if train:
                         for idx in env_err:
                             dones[idx] = True
                             dones[envs+idx] = True
-                            rewards[idx] -= -10.0
-                            rewards[envs+idx] -= -10.0
+                            rewards[idx] -= -100.0
+                            rewards[envs+idx] -= -100.0
                     dones[:envs][entered_left_goal_mask | entered_right_goal_mask] = True
                     dones[envs:][entered_left_goal_mask | entered_right_goal_mask] = True
 
-                    rewards[:envs][entered_left_goal_mask] -= 10
-                    rewards[:envs][entered_right_goal_mask] += 10
-                    rewards[envs:][entered_left_goal_mask] += 10
-                    rewards[envs:][entered_right_goal_mask] -= 10
+                    rewards[:envs][entered_left_goal_mask] -= 100
+                    rewards[:envs][entered_right_goal_mask] += 100
+                    rewards[envs:][entered_left_goal_mask] += 100
+                    rewards[envs:][entered_right_goal_mask] -= 100
 
                     rewards[:envs] += np.where(cross_right > 0,\
-                                    cross_right / 100,\
+                                    cross_right / 2,\
                                     np.where(cross_right == -0.5, miss_penalty, 0))
                     rewards[envs:] += np.where(cross_left > 0,\
-                                    cross_left / 100,\
+                                    cross_left / 2,\
                                     np.where(cross_left == -0.5, miss_penalty, 0))
                     
                     puck_left = puck_pos[:,0] < (bounds[0]/2)
-                    obs[:envs,-1][puck_left] += 1/(1*60)
-                    obs[:envs,-1][np.logical_not(puck_left)] = 0
-                    obs[envs:,-1][np.logical_not(puck_left)] += 1/(1*60)
-                    obs[envs:,-1][puck_left] = 0
+                    #obs[:envs,-1][puck_left] += 1/(60)
+                    #obs[:envs,-1][np.logical_not(puck_left)] = 0
+                    #obs[envs:,-1][np.logical_not(puck_left)] += 1/(60)
+                    #obs[envs:,-1][puck_left] = 0
+                    rewards[:envs][np.logical_not(puck_left)] -= 2*(np.linalg.norm(obs[:envs,20:22] - mallet_init[0], axis=1))[np.logical_not(puck_left)]
+                    rewards[envs:][puck_left] -= 2*(np.linalg.norm(obs[envs:,20:22] - mallet_init[0],axis=1))[puck_left]
 
-                    #actions_since_cross[np.logical_or(cross_left!=-1, cross_right!=-1)] = 0
+                    obs[:,-1] += 1/(horizon)
+
+                    actions_since_cross[np.logical_or(cross_left!=-1, cross_right!=-1)] = 0
 
                     # (2*envs, 20)
                     camera_obs = camera_buffer.get(indices=[img_idx, img_idx+1, img_idx+2, img_idx+5, img_idx+11])
@@ -782,10 +804,12 @@ if train:
 
                     break
 
-            timer_reset = np.logical_or(obs[:envs,-1] > 0.999, obs[envs:,-1] > 0.999)
-            dones[:envs][timer_reset] = True
-            dones[envs:][timer_reset] = True
-            rewards[obs[:,-1] > 0.999] -= 10.0
+            #timer_reset = np.logical_or(obs[:envs,-1] > 0.999, obs[envs:,-1] > 0.999)
+            #dones[:envs][timer_reset] = True
+            #dones[envs:][timer_reset] = True
+            #rewards[obs[:,-1] > 0.999] -= 10.0
+            out_of_time = np.logical_and(obs[:,-1] >= 1, np.logical_not(dones))
+            dones[out_of_time] = True
             
             replay_buffer.extend(TensorDict({
                     "observation": tensor_obs["observation"].to('cpu'),
@@ -795,18 +819,18 @@ if train:
                     "next_observation": torch.tensor(obs, dtype=torch.float32),
                     "sample_log_prob": log_prob
                 }, batch_size=[2*envs]))
-
-            obs[:envs][timer_reset] = 0
-            obs[envs:][timer_reset] = 0
             
             sim.display_state(0)
 
-            #actions_since_cross += 1
-            #actions_since_cross[dones[:envs]] = 0
-            #too_long_reset = actions_since_cross > 60*4
-            #actions_since_cross[too_long_reset] = 0
-            #dones[:envs][too_long_reset] = True
-            #dones[envs:][too_long_reset] = True
+            obs[:,-1][out_of_time] = 0
+            dones[out_of_time] = False
+
+            actions_since_cross += 1
+            actions_since_cross[dones[:envs]] = 0
+            too_long_reset = actions_since_cross > 60*5
+            actions_since_cross[too_long_reset] = 0
+            dones[:envs][too_long_reset] = True
+            dones[envs:][too_long_reset] = True
 
             num_resets = int(np.sum(dones) / 2)
 
@@ -837,7 +861,7 @@ if train:
                 ab_obs[:num_resets, :] = (ab_vars[:,0,:] / pullyR) * ab_obs_scaling[:]
                 ab_obs[num_resets:, :] = (ab_vars[:,1,:] / pullyR) * ab_obs_scaling[:]
 
-                obs[dones] = np.concatenate([obs_init[dones], np.tile(coll_vars, (2,1)), ab_obs, np.zeros((2*num_resets, 1))], axis=1)
+                obs[dones] = np.concatenate([obs_init[dones], np.tile(coll_vars, (2,1)), ab_obs, np.random.random((2*num_resets, 1))], axis=1)
 
                 camera_buffer.reset(np.where(dones)[0])
 
@@ -846,9 +870,12 @@ if train:
             past_obs = obs.copy()
             dones[:] = False
             rewards[:] = 0
+
+        if update < 6:
+            continue
                 
         print("training...")
-        for i in range(500):
+        for i in range(25):
             batch = replay_buffer.sample(batch_size).to('cuda')
             
             t_obs = batch["observation"]
@@ -884,27 +911,39 @@ if train:
                 "action": t_action,
                 "observation": t_obs,
                 "next": TensorDict({
-                    "done": t_done,
+                    "done": t_done.clone().detach(),
                     "observation": t_next_obs,
-                    "reward": t_reward,
-                    "terminated": t_done
+                    "reward": t_reward.clone().detach(),
+                    "terminated": t_done.clone().detach()
                 }, batch_size=[batch_size]),
-                "sample_log_prob": t_log_prob
+                "sample_log_prob": t_log_prob.clone().detach()
             }, batch_size=[batch_size]).to('cuda')
 
-            advantage_module(tensordict_data)
+            with torch.no_grad():
+                advantage_module(tensordict_data)
 
             loss_vals = loss_module(tensordict_data)
-            loss_value = (
-                loss_vals["loss_objective"]
-                + loss_vals["loss_critic"]
-                #+ loss_vals["loss_entropy"]
-            )
+            #loss_value = (
+            #    loss_vals["loss_objective"]
+            #    + loss_vals["loss_critic"]
+            #    + loss_vals["loss_entropy"]
+            #)
 
-            optimizer.zero_grad()
-            loss_value.backward()
-            torch.nn.utils.clip_grad_norm_(loss_module.parameters(),1)
-            optimizer.step()
+            #if update > 30:
+            policy_optimizer.zero_grad()
+            loss_vals["loss_objective"].backward()
+            torch.nn.utils.clip_grad_norm_(policy_module.parameters(),1)
+            policy_optimizer.step()
+
+            value_optimizer.zero_grad()
+            loss_vals["loss_critic"].backward()
+            torch.nn.utils.clip_grad_norm_(value_module.parameters(),1)
+            value_optimizer.step()
+
+            #optimizer.zero_grad()
+            #loss_value.backward()
+            #torch.nn.utils.clip_grad_norm_(loss_module.parameters(),1)
+            #optimizer.step()
 
             tensordict_data = TensorDict({
                 "action": t_action_flip,
@@ -918,106 +957,38 @@ if train:
                 "sample_log_prob": t_log_prob.clone().detach()
             }, batch_size=[batch_size]).to('cuda')
 
-            advantage_module(tensordict_data)
+            with torch.no_grad():
+                advantage_module(tensordict_data)
 
             loss_vals = loss_module(tensordict_data)
-            loss_value = (
-                loss_vals["loss_objective"]
-                + loss_vals["loss_critic"]
-                #+ loss_vals["loss_entropy"]
-            )
+            
+            #if update > 30:
+            policy_optimizer.zero_grad()
+            loss_vals["loss_objective"].backward()
+            torch.nn.utils.clip_grad_norm_(policy_module.parameters(),1)
+            policy_optimizer.step()
 
-            optimizer.zero_grad()
-            loss_value.backward()
-            torch.nn.utils.clip_grad_norm_(loss_module.parameters(),1)
-            optimizer.step()
+            value_optimizer.zero_grad()
+            loss_vals["loss_critic"].backward()
+            torch.nn.utils.clip_grad_norm_(value_module.parameters(),1)
+            value_optimizer.step()
 
-            """
-            with torch.no_grad():
-                tensor_next_obs = TensorDict({"observation": t_next_obs})
-                policy_module(tensor_next_obs)
-                tensor_next_obs["action"] = tensor_next_obs["action"].float()
-                q1_target_module(tensor_next_obs)
-                q2_target_module(tensor_next_obs)
-                target_Q = torch.squeeze(torch.min(tensor_next_obs["state_action_value_target1"], tensor_next_obs["state_action_value_target2"]))
-                target_Q = (t_reward + torch.logical_not(t_done) * gamma * (target_Q - alpha * tensor_next_obs["sample_log_prob"])).float()
+        if update % 25 == 0:
+            torch.save({
+                'policy_state_dict': policy_module.state_dict(),
+                'value_state_dict': value_module.state_dict(),
+                'optim_policy_state_dict': policy_optimizer.state_dict(),
+                'optim_value_state_dict': value_optimizer.state_dict(),
+            }, save_filepath)
 
-            tensor_obs = TensorDict({"observation": t_obs, "action": t_action})
-            # Get current Q estimates
-            q1_module(tensor_obs)
-            q2_module(tensor_obs)
-
-            q1_loss = mse(torch.squeeze(tensor_obs["state_action_value1"]), target_Q)
-            q1_optimizer.zero_grad()
-            q1_loss.backward()
-            q1_optimizer.step()
-
-            q2_loss = mse(torch.squeeze(tensor_obs["state_action_value2"]), target_Q)
-            q2_optimizer.zero_grad()
-            q2_loss.backward()
-            q2_optimizer.step()
-
-            if update > 1:
-
-                tensor_obs_policy = TensorDict({"observation": t_obs})
-                policy_module(tensor_obs_policy)
-                tensor_obs_policy['action'] = tensor_obs_policy['action'].float()
-
-                q1_module(tensor_obs_policy)
-                q2_module(tensor_obs_policy)
-
-                current_Q = torch.squeeze(torch.min(tensor_obs_policy["state_action_value1"], 
-                                    tensor_obs_policy["state_action_value2"]))
-
-                actor_loss = (alpha * tensor_obs_policy["sample_log_prob"] - current_Q).mean()
-
-                policy_optimizer.zero_grad()
-                actor_loss.backward()
-                policy_optimizer.step()
-
-                alpha_loss = -(log_alpha * (tensor_obs_policy["sample_log_prob"] + target_entropy).detach()).mean()
-                alpha_optimizer.zero_grad()
-                alpha_loss.backward()
-                alpha_optimizer.step()
-                alpha = log_alpha.exp()
-
-            for param, target_param in zip(q1_module.parameters(), q1_target_module.parameters()):
-                target_param.data.copy_(tau * param.data + (1 - tau) * target_param.data)
-
-            for param, target_param in zip(q2_module.parameters(), q2_target_module.parameters()):
-                target_param.data.copy_(tau * param.data + (1 - tau) * target_param.data)
-            """
-
-        torch.save({
-            'policy_state_dict': policy_module.state_dict(),
-            'value_state_dict': value_module.state_dict(),
-            'optim_state_dict': optimizer.state_dict(),
-        }, save_filepath)
-
-        """
-        torch.save({
-            'policy_state_dict': policy_module.state_dict(),
-            'q1_state_dict': q1_module.state_dict(),
-            'q2_state_dict': q2_module.state_dict(),
-            'q1_target_state_dict': q1_target_module.state_dict(),
-            'q2_target_state_dict': q2_target_module.state_dict(),
-            'policy_optimizer_state_dict': policy_optimizer.state_dict(),
-            'q1_optimizer_state_dict': q1_optimizer.state_dict(),
-            'q2_optimizer_state_dict': q2_optimizer.state_dict(),
-            'alpha_oe388c35d-c99f-4f45-9e2f-3e229795f7acptimizer_state_dict': alpha_optimizer.state_dict(),
-            'log_alpha': log_alpha,
-        }, save_filepath)
-        """
-        
-
-#Display
-while True:
+reward_sum = np.zeros((2*envs))
+for timestep in range(100000):
     tensor_obs = TensorDict({"observation": torch.tensor(past_obs, dtype=torch.float32)}).to('cuda')
 
     policy_out = policy_module(tensor_obs)
     value_out = value_module(tensor_obs)
-    print(value_out["state_value"])
-
+    print("---")
+    print(value_out["state_value"].detach().to('cpu').numpy())
     actions = policy_out["action"].detach().to('cpu')
     policy_out["sample_log_prob"] = torch.maximum(policy_out["sample_log_prob"], torch.tensor(-8, dtype=torch.float32))
     log_prob = policy_out["sample_log_prob"].detach().to('cpu')
@@ -1043,26 +1014,33 @@ while True:
 
     Vo = actions_np[:,2][:, None] * Vmax * np.stack((1+actions_np[:,3], 1-actions_np[:,3]), axis=1)
     too_low_voltage = np.logical_or(Vo[:,0] < 0.3, Vo[:,1] < 0.3)
-    rewards[too_low_voltage] -= 0.01
+    rewards[too_low_voltage] -= 0.5
     if too_low_voltage[0]:
         print("LOW VOLTAGE")
     Vo = np.stack([Vo[:envs,:], Vo[envs:,:]], axis=1)
 
     sim.take_action(xf, Vo)
 
-    #midpoint_acc = sim.get_xpp(0.004)
-    #rewards[:envs] += (100 - np.sqrt(np.sum(midpoint_acc[:,0,:]**2, axis=1))) / 100000
-    #rewards[envs:] += (100 - np.sqrt(np.sum(midpoint_acc[:,1,:]**2, axis=1))) / 100000
+    midpoint_acc = sim.get_xpp(0.004)
+    rewards[:envs] -= np.sqrt(np.sum(midpoint_acc[:,0,:]**2, axis=1)) / 1000
+    rewards[envs:] -= np.sqrt(np.sum(midpoint_acc[:,1,:]**2, axis=1)) / 1000
 
     #acc_time = sim.get_a()
     #acc_time = np.concatenate([np.max(acc_time[:,0,:],axis=1), np.max(acc_time[:,1,:],axis=1)])
-    #rewards += np.clip(0.05 - acc_time, -10, 0) / 500
+    #rewards += np.clip(0.05 - acc_time, -10, 0) / 5000
 
-    #on_edge_mask = np.logical_or(np.logical_or(xf[:,0,0] < 0.05, xf[:,0,0] > bounds[0]/2 - 0.05), np.logical_or(xf[:,0,1] < 0.05, xf[:,0,1] > bounds[1] - 0.05))
+    #on_edge_mask = np.logical_or(np.logical_or(xf[:,0,0] < 0.02+mallet_r, xf[:,0,0] > bounds[0]/2-mallet_r - 0.02), np.logical_or(xf[:,0,1] < mallet_r + 0.02, xf[:,0,1] > bounds[1]-mallet_r - 0.02))
     #rewards[:envs][on_edge_mask] -= 0.01
 
-    #on_edge_mask = np.logical_or(np.logical_or(xf[:,1,0] < bounds[0]/2 + 0.05, xf[:,1,0] > bounds[0] - 0.05), np.logical_or(xf[:,1,1] < 0.05, xf[:,1,1] > bounds[1] - 0.05))
+    #on_edge_mask = np.logical_or(np.logical_or(xf[:,1,0] < bounds[0]/2+mallet_r + 0.02, xf[:,1,0] > bounds[0] -mallet_r- 0.02), np.logical_or(xf[:,1,1] < mallet_r+0.02, xf[:,1,1] > bounds[1]-mallet_r - 0.02))
     #rewards[envs:][on_edge_mask] -= 0.01
+
+    #puck_left = obs[:envs,0] < bounds[0]/2
+
+    rewards[:envs] += np.where(np.linalg.norm(actions_np[:envs,:2] - obs[:envs,:2], axis=1) < 0.1, 1, 0)
+    rewards[envs:] += np.where(np.linalg.norm(actions_np[envs:,:2] - obs[envs:,:2], axis=1) < 0.1, 1, 0)
+
+    #print(rewards[0])
 
     while True:
         img_idx = None
@@ -1103,25 +1081,25 @@ while True:
                 for idx in env_err:
                     dones[idx] = True
                     dones[envs+idx] = True
-                    rewards[idx] -= -10.0
-                    rewards[envs+idx] -= -10.0
+                    rewards[idx] -= -100.0
+                    rewards[envs+idx] -= -100.0
 
             dones[:envs][entered_left_goal_mask | entered_right_goal_mask] = True
             dones[envs:][entered_left_goal_mask | entered_right_goal_mask] = True
 
-            rewards[:envs][entered_left_goal_mask] -= 10
-            rewards[:envs][entered_right_goal_mask] += 10
-            rewards[envs:][entered_left_goal_mask] += 10
-            rewards[envs:][entered_right_goal_mask] -= 10
+            rewards[:envs][entered_left_goal_mask] -= 100
+            rewards[:envs][entered_right_goal_mask] += 100
+            rewards[envs:][entered_left_goal_mask] += 100
+            rewards[envs:][entered_right_goal_mask] -= 100
 
             rewards[:envs] += np.where(cross_right > 0,\
-                            cross_right / 100,\
+                            cross_right / 2,\
                             np.where(cross_right == -0.5, miss_penalty, 0))
             rewards[envs:] += np.where(cross_left > 0,\
-                            cross_left / 100,\
+                            cross_left / 2,\
                             np.where(cross_left == -0.5, miss_penalty, 0))
             
-            #actions_since_cross[np.logical_or(cross_left != -1, cross_right != -1)] = 0
+            actions_since_cross[np.logical_or(cross_left != -1, cross_right != -1)] = 0
 
             for i in range(2):
                 noise_idx = (puck_pos*100).astype(np.int16) + noise_seeds[:,i,:]
@@ -1155,24 +1133,24 @@ while True:
                 for idx in env_err:
                     dones[idx] = True
                     dones[envs+idx] = True
-                    rewards[idx] -= -10.0
-                    rewards[envs+idx] -= -10.0
+                    rewards[idx] -= -100.0
+                    rewards[envs+idx] -= -100.0
             dones[:envs][entered_left_goal_mask | entered_right_goal_mask] = True
             dones[envs:][entered_left_goal_mask | entered_right_goal_mask] = True
 
-            rewards[:envs][entered_left_goal_mask] -= 10
-            rewards[:envs][entered_right_goal_mask] += 10
-            rewards[envs:][entered_left_goal_mask] += 10
-            rewards[envs:][entered_right_goal_mask] -= 10
+            rewards[:envs][entered_left_goal_mask] -= 100
+            rewards[:envs][entered_right_goal_mask] += 100
+            rewards[envs:][entered_left_goal_mask] += 100
+            rewards[envs:][entered_right_goal_mask] -= 100
 
             rewards[:envs] += np.where(cross_right > 0,\
-                            cross_right / 100,\
+                            cross_right / 2,\
                             np.where(cross_right == -0.5, miss_penalty, 0))
             rewards[envs:] += np.where(cross_left > 0,\
-                            cross_left / 100,\
+                            cross_left / 2,\
                             np.where(cross_left == -0.5, miss_penalty, 0))
             
-            #actions_since_cross[np.logical_or(cross_left!=-1, cross_right!=-1)] = 0
+            actions_since_cross[np.logical_or(cross_left!=-1, cross_right!=-1)] = 0
 
             #mallet_noise = np.empty((envs, 4)) #mallet, op mallet
             for i in range(4):
@@ -1198,30 +1176,34 @@ while True:
                 for idx in env_err:
                     dones[idx] = True
                     dones[envs+idx] = True
-                    rewards[idx] -= -10.0
-                    rewards[envs+idx] -= -10.0
+                    rewards[idx] -= -100.0
+                    rewards[envs+idx] -= -100.0
             dones[:envs][entered_left_goal_mask | entered_right_goal_mask] = True
             dones[envs:][entered_left_goal_mask | entered_right_goal_mask] = True
 
-            rewards[:envs][entered_left_goal_mask] -= 10
-            rewards[:envs][entered_right_goal_mask] += 10
-            rewards[envs:][entered_left_goal_mask] += 10
-            rewards[envs:][entered_right_goal_mask] -= 10
+            rewards[:envs][entered_left_goal_mask] -= 100
+            rewards[:envs][entered_right_goal_mask] += 100
+            rewards[envs:][entered_left_goal_mask] += 100
+            rewards[envs:][entered_right_goal_mask] -= 100
 
             rewards[:envs] += np.where(cross_right > 0,\
-                            cross_right / 100,\
+                            cross_right / 2,\
                             np.where(cross_right == -0.5, miss_penalty, 0))
             rewards[envs:] += np.where(cross_left > 0,\
-                            cross_left / 100,\
+                            cross_left / 2,\
                             np.where(cross_left == -0.5, miss_penalty, 0))
             
             puck_left = puck_pos[:,0] < (bounds[0]/2)
-            obs[:envs,-1][puck_left] += 1/(1*60)
-            obs[:envs,-1][np.logical_not(puck_left)] = 0
-            obs[envs:,-1][np.logical_not(puck_left)] += 1/(1*60)
-            obs[envs:,-1][puck_left] = 0
+            #obs[:envs,-1][puck_left] += 1/(60)
+            #obs[:envs,-1][np.logical_not(puck_left)] = 0
+            #obs[envs:,-1][np.logical_not(puck_left)] += 1/(60)
+            #obs[envs:,-1][puck_left] = 0
+            rewards[:envs][np.logical_not(puck_left)] -= 2*(np.linalg.norm(obs[:envs,20:22] - mallet_init[0], axis=1))[np.logical_not(puck_left)]
+            rewards[envs:][puck_left] -= 2*(np.linalg.norm(obs[envs:,20:22] - mallet_init[0],axis=1))[puck_left]
 
-            #actions_since_cross[np.logical_or(cross_left!=-1, cross_right!=-1)] = 0
+            obs[:,-1] += 1/(horizon)
+
+            actions_since_cross[np.logical_or(cross_left!=-1, cross_right!=-1)] = 0
 
             # (2*envs, 20)
             camera_obs = camera_buffer.get(indices=[img_idx, img_idx+1, img_idx+2, img_idx+5, img_idx+11])
@@ -1233,23 +1215,45 @@ while True:
 
             break
 
-    timer_reset = np.logical_or(obs[:envs,-1] > 0.999, obs[envs:,-1] > 0.999)
-    if np.any(timer_reset):
-        pass
-    dones[:envs][timer_reset] = True
-    dones[envs:][timer_reset] = True
-    rewards[obs[:,-1] > 0.999] -= 10.0
-    obs[:envs][timer_reset] = 0
-    obs[envs:][timer_reset] = 0
+    #timer_reset = np.logical_or(obs[:envs,-1] > 0.999, obs[envs:,-1] > 0.999)
+    #dones[:envs][timer_reset] = True
+    #dones[envs:][timer_reset] = True
+    #rewards[obs[:,-1] > 0.999] -= 10.0
+    out_of_time = np.logical_and(obs[:,-1] >= 1, np.logical_not(dones))
+    dones[out_of_time] = True
+
+    reward_sum += rewards
+    print(reward_sum)
+
+ 
+    #replay_buffer.extend(TensorDict({
+    #        "observation": tensor_obs["observation"].to('cpu'),
+    #        "action": torch.tensor(obs[:,28:32], dtype=torch.float32),
+    #        "reward": torch.tensor(rewards, dtype=torch.float32),
+    #        "done": torch.tensor(dones, dtype=torch.bool),
+    #        "next_observation": torch.tensor(obs, dtype=torch.float32),
+    #        "sample_log_prob": log_prob
+    #    }, batch_size=[2*envs]))
+    print("===")
+    print(tensor_obs["observation"].to('cpu')[:,-1])
+    print(rewards)
+    print(dones)
+    print(obs[:,-1])
     
     sim.display_state(0)
 
-    #actions_since_cross += 1
-    #actions_since_cross[dones[:envs]] = 0
-    #too_long_reset = actions_since_cross > 60*4
-    #actions_since_cross[too_long_reset] = 0
-    #dones[:envs][too_long_reset] = True
-    #dones[envs:][too_long_reset] = True
+    obs[:,-1][out_of_time] = 0
+    dones[out_of_time] = False
+    reward_sum[out_of_time] = 0
+
+    actions_since_cross += 1
+    actions_since_cross[dones[:envs]] = 0
+    too_long_reset = actions_since_cross > 60*5
+    actions_since_cross[too_long_reset] = 0
+    dones[:envs][too_long_reset] = True
+    dones[envs:][too_long_reset] = True
+    reward_sum[dones] = 0
+    
 
     num_resets = int(np.sum(dones) / 2)
 
@@ -1280,7 +1284,7 @@ while True:
         ab_obs[:num_resets, :] = (ab_vars[:,0,:] / pullyR) * ab_obs_scaling[:]
         ab_obs[num_resets:, :] = (ab_vars[:,1,:] / pullyR) * ab_obs_scaling[:]
 
-        obs[dones] = np.concatenate([obs_init[dones], np.tile(coll_vars, (2,1)), ab_obs, np.zeros((2*num_resets, 1))], axis=1)
+        obs[dones] = np.concatenate([obs_init[dones], np.tile(coll_vars, (2,1)), ab_obs, np.random.random((2*num_resets, 1))], axis=1)
 
         camera_buffer.reset(np.where(dones)[0])
 

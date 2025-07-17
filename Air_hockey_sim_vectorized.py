@@ -85,7 +85,7 @@ def initalize(envs, mallet_r=0.05, puck_r=0.05, goal_w=0.35, V_max=24, pully_rad
 
     reset_mask = np.full((game_number), False)
 
-    margin = 0.001
+    margin = 0.01
     #shape (2, 2, 2), player, x/y, lower/upper
     bounds_mallet = np.array([[[mallet_radius+margin, width/2 - mallet_radius - margin],\
                     [mallet_radius + margin, height - mallet_radius - margin]],\

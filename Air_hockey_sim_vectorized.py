@@ -46,6 +46,7 @@ def initalize(envs, mallet_r=0.05, puck_r=0.05, goal_w=0.35, V_max=24, pully_rad
     global x_p
     global x_pp
     global reset_mask
+    global reset_sim_mask
     global margin
     global bounds_mallet
     global bounds_puck
@@ -54,12 +55,18 @@ def initalize(envs, mallet_r=0.05, puck_r=0.05, goal_w=0.35, V_max=24, pully_rad
     global mass
     global res
     global puck_init
+    global sink_bounds
+    global sinks
 
     time = 0
 
     game_number = envs
     mallet_radius = mallet_r
     puck_radius = puck_r
+
+    sink_bounds = np.array([[puck_r, width - puck_r], [puck_r, height-puck_r]])
+    sinks = np.random.rand(game_number, 2) * (sink_bounds[:,1] - sink_bounds[:,0]) + sink_bounds[:,0]
+    
 
     goal_width = goal_w
 
@@ -84,6 +91,7 @@ def initalize(envs, mallet_r=0.05, puck_r=0.05, goal_w=0.35, V_max=24, pully_rad
     x_pp = np.zeros((game_number,2,2), dtype="float32")
 
     reset_mask = np.full((game_number), False)
+    reset_sim_mask = np.full((game_number), False)
 
     margin = 0.01
     #shape (2, 2, 2), player, x/y, lower/upper
@@ -267,14 +275,15 @@ def corner_collision(A, pos, vel, t, C, D, v_norm, dir, dPdt,B,f,mass, vt, res):
         thit_min, converged = brentq(distance_to_wall, 0, t, args=(wall_val,B,f,mass,C,D),\
                                         xtol=1e-5, maxiter=30, full_output=True, disp=False)
         if not converged.converged:
-            print("Failed to converge corner collision")
-            print(pos)
-            print(vel)
-            print(wall_val)
-            print(wall_val/v_norm)
-            print(v_norm)
-            print(C)
-            print(D)
+            pass
+            #print("Failed to converge corner collision")
+            #print(pos)
+            #print(vel)
+            #print(wall_val)
+            #print(wall_val/v_norm)
+            #print(v_norm)
+            #print(C)
+            #print(D)
             #print((new_pos[0] - pos[0])*tPZero[0]/(final_pos[0]-pos[0]))
 
     new_vel = [0,0]
@@ -933,7 +942,7 @@ def update_puck(t, mask, t_init, no_M = False, noM_pos = None, noM_vel = None, i
             else:
                 noM_pos, _, hitM = step_noM(1.0, center_pos, center_vel, np.where(mask)[0][crossed_to_left].astype(np.int32), x_mc)
             entered_goal = noM_pos[:,0] < 0
-            cross_left[crossed_to_left] = np.where(entered_goal, np.where(hitM, -0.5, np.sum(center_vel**2, axis=1)), -0.5)
+            cross_left[crossed_to_left] = np.where(entered_goal, np.where(hitM, -0.25, np.sum(center_vel**2, axis=1)), -0.5)
 
         if np.any(crossed_to_right):
             dist = np.sqrt(np.sum((pos[crossed_to_right] - new_pos[crossed_to_right])**2, axis=1)) * (pos[crossed_to_right,0] - (surface[0]/2+puck_radius)) / (pos[crossed_to_right,0] - new_pos[crossed_to_right,0])
@@ -974,7 +983,7 @@ def update_puck(t, mask, t_init, no_M = False, noM_pos = None, noM_vel = None, i
             else:
                 noM_pos, _, hitM = step_noM(1.0, center_pos, center_vel, np.where(mask)[0][crossed_to_right].astype(np.int32), x_mc)
             entered_goal = noM_pos[:,0] > surface[0]
-            cross_right[crossed_to_right] = np.where(entered_goal, np.where(hitM, -0.5, np.sum(center_vel**2, axis=1)), -0.5)
+            cross_right[crossed_to_right] = np.where(entered_goal, np.where(hitM, -0.25, np.sum(center_vel**2, axis=1)), -0.5)
 
         return new_pos, new_vel, recurr_time_m, recurr_mask_m, cross_left, cross_right
 
@@ -1345,24 +1354,25 @@ def solve_a():
     if not converged:
         indices = np.argwhere(np.abs(err) > 1e-4)
         for i,j,k in indices:
-            print("failed to converge a")
-            print(err[i,j,k])
-            print(err_prime[i,j,k])
-            print(x0[i,j,k])
-            print("---")
-            print(x_p[i,j,k])
-            print(x_pp[i,j,k])
-            print(C2[i,j,k] * A2CE[i,j,k,2])
-            print(C1[i,j,k])
-            print("---")
-            log_arg = (-C1[i,j,k]*CE[i,j,k,3])/(C1[i,j,k]*CE[i,j,k,1]+C2[i,j,k]*A2CE[i,j,k,1]+C3[i,j,k]*A3CE[i,j,k,1]+C4[i,j,k]*A4CE[i,j,k,1])
-            x_over_2 = C2[i,j,k]/C7[i,j,k] - (-C1[i,j,k]/(ab[i,j,k,1]*C7[i,j,k]) * np.log(log_arg))
-            print(overshoot_mask[i,j,k])
-            print(x_0[i,j,k])
-            print(x_f[i,j,k])
-            print(x_over[i,j,k])
-            print(x_over_2)
-            print("---")
+            #print("failed to converge a")
+            #print(err[i,j,k])
+            #print(err_prime[i,j,k])
+            #print(x0[i,j,k])
+            #print("---")
+            #print(x_p[i,j,k])
+            #print(x_pp[i,j,k])
+            #print(C2[i,j,k] * A2CE[i,j,k,2])
+            #print(C1[i,j,k])
+            #print("---")
+            #log_arg = (-C1[i,j,k]*CE[i,j,k,3])/(C1[i,j,k]*CE[i,j,k,1]+C2[i,j,k]*A2CE[i,j,k,1]+C3[i,j,k]*A3CE[i,j,k,1]+C4[i,j,k]*A4CE[i,j,k,1])
+            #x_over_2 = C2[i,j,k]/C7[i,j,k] - (-C1[i,j,k]/(ab[i,j,k,1]*C7[i,j,k]) * np.log(log_arg))
+            #print(overshoot_mask[i,j,k])
+            #print(x_0[i,j,k])
+            #print(x_f[i,j,k])
+            #print(x_over[i,j,k])
+            #print(x_over_2)
+            #print("---")
+            pass
         
 
     return x0
@@ -1443,16 +1453,17 @@ def update_path(time, xf, Vo, reset_mask):
                                         xtol=1e-8, maxiter=50, full_output=True, disp=False)
                     
                 if not converged.converged:
-                    print("C1p Failed to Converge")
-                    print(solve_Cp1(0.05, i,j,k,c_fixed))
-                    print(solve_Cp1(root, i,j,k,c_fixed))
-                    print(root)
-                    print(x_0[i,j,k])
-                    print("---")
-                    print(x_p[i,j,k])
-                    print(x_pp[i,j,k])
-                    print(x_over[i,j,k])
-                    print(bounds_mallet[i,j,k,1])
+                    #print("C1p Failed to Converge")
+                    #print(solve_Cp1(0.05, i,j,k,c_fixed))
+                    #print(solve_Cp1(root, i,j,k,c_fixed))
+                    #print(root)
+                    #print(x_0[i,j,k])
+                    #print("---")
+                    #print(x_p[i,j,k])
+                    #print(x_pp[i,j,k])
+                    #print(x_over[i,j,k])
+                    #print(bounds_mallet[i,j,k,1])
+                    pass
 
             root = np.minimum(abs(root), Vmax * pullyR-0.0001)
 
@@ -1483,16 +1494,17 @@ def update_path(time, xf, Vo, reset_mask):
                 
 
                 if not converged.converged:
-                    print("C1n Failed to Converge")
-                    print(solve_Cn1(-0.05, i,j,k,c_fixed))
-                    print(solve_Cn1(root, i,j,k,c_fixed))
-                    print(root)
-                    print(x_0[i,j,k])
-                    print("---")
-                    print(x_p[i,j,k])
-                    print(x_pp[i,j,k])
-                    print(x_over[i,j,k])
-                    print(bounds_mallet[i,j,k,0])
+                    #print("C1n Failed to Converge")
+                    #print(solve_Cn1(-0.05, i,j,k,c_fixed))
+                    #print(solve_Cn1(root, i,j,k,c_fixed))
+                    #print(root)
+                    #print(x_0[i,j,k])
+                    #print("---")
+                    #print(x_p[i,j,k])
+                    #print(x_pp[i,j,k])
+                    #print(x_over[i,j,k])
+                    #print(bounds_mallet[i,j,k,0])
+                    pass
 
             root = np.minimum(abs(root), Vmax * pullyR-0.0001)
 
@@ -1529,6 +1541,7 @@ def step(t):
     global puck_pos
     global mallet_pos
     global mallet_vel
+    global puck_vel
     recurr_mask = np.full((game_number), True)
     recurr_mask[reset_mask] = False
     recurr_time = np.full((game_number), t, dtype="float32")
@@ -1576,21 +1589,33 @@ def step(t):
     mallet_pos[np.logical_not(reset_mask)] = get_pos(np.full((game_number), time))[np.logical_not(reset_mask)]
     mallet_vel[np.logical_not(reset_mask)] = get_xp(np.full((game_number),time))[np.logical_not(reset_mask)]
 
-    return mallet_pos, mallet_vel, puck_pos, cross_left, cross_right #mallet_hit, puck_wall_collision
+    return mallet_pos, mallet_vel, puck_pos, puck_vel, cross_left, cross_right #mallet_hit, puck_wall_collision
 
-def impulse(epsilon=0.01, theta = 0):
+def impulse(epsilon, delta):
     global puck_vel
-    n = len(puck_vel)
-    #angle = np.random.uniform(0, 2*np.pi)
-    #radius = np.random.uniform(0,1) ** 0.5 * epsilon
-    angle = theta
-    radius = epsilon
-    random_vector = np.array([radius * np.cos(angle), radius*np.sin(angle)])
-    random_vectors = np.tile(random_vector, (n,1))
+    global puck_pos
+    global sinks
+    global sink_bounds
+    angles = np.random.uniform(0, 2 * np.pi, size=(game_number,))
+    directions = np.stack([np.cos(angles), np.sin(angles)], axis=1)
+    sinks = sinks + epsilon * directions
 
-    puck_vel += random_vectors #+ offset * puck_vel / np.maximum(np.linalg.norm(puck_vel, axis=1), 0.001)[:,None]
-    #puck_vel[:,0] += np.where(puck_pos[:,0] < 0.7, 0.02, -0.014)
-    #puck_vel[:,1] += np.where(puck_pos[:,1] < 0.5, 0.02, -0.014)
+    for i in range(2):  # x and y
+        low = sink_bounds[i, 0]
+        high = sink_bounds[i, 1]
+
+        over = sinks[:, i] > high
+        under = sinks[:, i] < low
+
+        sinks[over, i] = 2 * high - sinks[over, i]
+        sinks[under, i] = 2 * low - sinks[under, i]
+
+    directions = sinks - puck_pos
+    norms = np.linalg.norm(directions, axis=1, keepdims=True)
+    norms[norms == 0] = 1.0
+    unit_dirs = directions / norms
+    low_vel = np.linalg.norm(puck_vel, axis=1) < 0.3
+    puck_vel[low_vel] = puck_vel[low_vel] + delta * unit_dirs[low_vel]
 
 def step_noM(t, puck_pos_noM = None, puck_vel_noM = None, recurr_mask=None, x_mc = None):
     
@@ -1632,8 +1657,11 @@ def step_noM(t, puck_pos_noM = None, puck_vel_noM = None, recurr_mask=None, x_mc
 def take_action(x_f, Vo):
     global time
     global reset_mask
+    global reset_sim_mask
     update_path(time, x_f, Vo, reset_mask)
-    reset_mask = np.full((game_number), False)
+    #reset_mask = np.full((game_number), False)
+    reset_mask[reset_sim_mask] = False
+    reset_sim_mask = np.full((game_number), False)
     time = 0
 
 def get_xf0():
@@ -1778,6 +1806,7 @@ def display_state(index, puck_pos_noM=None):
         puck_pos_noM_scaled = [puck_pos_noM[0] * plr, puck_pos_noM[1] * plr]
         cv2.circle(img, to_int_coords(puck_pos_noM_scaled), int(puck_radius * plr), (0, 255, 0), -1)
 
+    img = np.flip(img, axis=0)
     # Show the image
     cv2.imshow('Air Hockey State', img)
     cv2.waitKey(1)  # Add small delay so window updates
@@ -1791,14 +1820,14 @@ def reset_sim(index = None, col_vars=None, ab_vars=None):#, left_scored= None):
         index = np.array([i for i in range(game_number)])
     #if left_scored is None:
     #    left_scored = index
-    global reset_mask
+    global reset_sim_mask
     global x_p
     global x_pp
     global puck_vel
     global puck_pos
     global mallet_vel
 
-    reset_mask[index] = True
+    reset_sim_mask[index] = True
 
     mallet_pos[index,0,:] = np.array([0.25,0.5])
     mallet_vel[index,:,:] = np.array([0.0, 0.0])

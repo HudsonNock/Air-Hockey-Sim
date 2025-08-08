@@ -201,12 +201,19 @@ class CameraTracker:
         """Compute the score based on distance from points to the circle."""
         distances = np.linalg.norm(points - center, axis=1)
         return np.sum(np.abs(distances - self.puck_r) < 0.0025)
+
+    #def circle_fitting_score(self, center, points):
+    #    distances = np.linalg.norm(points - center, axis=1)
+    #    return np.sum(np.abs(distances - self.puck_r) < 0.0025) - 2*np.sum(distances > self.puck_r + 0.0025)
     
     def fit_circle(self, points, centroid):        
         min_x = np.min(points[:,0])
         max_x = np.max(points[:,0])
 
-        if max_x - min_x > 2*self.puck_r - 0.002:
+        min_y = points[np.argmin(points[:, 1])]
+        max_y = points[np.argmax(points[:, 1])]
+
+        if max_x - min_x > 2*self.puck_r - 0.002 and min_y[1] - min_x[1] > 2*self.puck_r - 0.002:
             return centroid
         
         close_points = points[np.abs(points[:, 0] - min_x) <= 0.0012]
@@ -219,6 +226,26 @@ class CameraTracker:
 
         min_score = self.circle_fitting_score(point_min_x, points)
         max_score = self.circle_fitting_score(point_max_x, points)
+
+        #if abs(min_y[0] - max_y[0]) < 0.002:
+        #    width = max_y[1] - min_y[1]
+        #    offset = np.sqrt(self.puck_r**2 - (width/2)**2)
+        #    y_contendor_1 = (min_y + max_y) / 2
+        #    y_contendor_1[0] -= offset
+        #    y_contendor_2 = (min_y + max_y) / 2
+        #    y_contendor_2[0] += offset
+        
+        #    y1_score = self.circle_fitting_score(y_contendor_1, points)
+        #    y2_score = self.circle_fitting_score(y_contendor_2, points)
+
+        #    scores = np.array([min_score, max_score, y1_score, y2_score])
+        #    points = np.concatenate([point_min_x, point_max_x, y_contendor_1, y_contendor_2], axis=0)
+        #    sorted_indices = np.argsort(scores)
+        #    if scores[sorted_indices[0]] > 1.5 * scores[sorted_indices[1]]:
+        #        return points[sorted_indices[0]]
+
+        #    distances = np.linalg.norm(points - self.past_puck_pos, axis=1)
+        #    return points[np.argmin(distances)]
 
         if min_score > 1.5 * max_score:
             return point_min_x
@@ -261,3 +288,4 @@ if __name__ == "__main__":
     img = cv2.imread("jump.bmp", cv2.IMREAD_GRAYSCALE)[:,376:376+1296]
     while True:
         track.process_frame(img)
+

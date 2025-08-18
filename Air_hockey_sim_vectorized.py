@@ -29,6 +29,10 @@ red = (255, 0, 0)
 green = (0, 100, 0)
 blue = (0,0,255)
 
+#fourcc = cv2.VideoWriter_fourcc(*'MJPG')
+#out = cv2.VideoWriter("161_vid.avi", fourcc, 60.0, (screen_width, screen_height))
+#frame_count = 0
+
 def initalize(envs, mallet_r=0.05, puck_r=0.05, goal_w=0.35, V_max=24, pully_radius=0.035306, coll_vars=None, ab_vars=None, puck_inits=None):
     global game_number 
     global time
@@ -1769,6 +1773,7 @@ def display_state(index, puck_pos_noM=None):
 """
 
 def display_state(index, puck_pos_noM=None):
+    global frame_count
     # Create a blank white image
     img = np.ones((screen_height, screen_width, 3), dtype=np.uint8) * 255
 
@@ -1809,8 +1814,14 @@ def display_state(index, puck_pos_noM=None):
     img = np.flip(img, axis=0)
     # Show the image
     cv2.imshow('Air Hockey State', img)
+    #out.write(img)
+    
     cv2.waitKey(1)  # Add small delay so window updates
-
+    #frame_count += 1
+    #if frame_count == 60*5:
+    #    out.release()
+    #    cv2.destroyAllWindows()
+    #    print(1/0.0)
 
 def get_mallet_bounds():
     return bounds_mallet
@@ -1828,6 +1839,7 @@ def reset_sim(index = None, col_vars=None, ab_vars=None):#, left_scored= None):
     global mallet_vel
 
     reset_sim_mask[index] = True
+    reset_mask[index] = True
 
     mallet_pos[index,0,:] = np.array([0.25,0.5])
     mallet_vel[index,:,:] = np.array([0.0, 0.0])

@@ -1,193 +1,123 @@
 #!/usr/bin/env python3
-import torch
 import PySpin
-import cv2
 import numpy as np
-import sys
-import os
-import agent_processing as ap
-import tracker
 import time
-from collections import deque
-
-import multiprocessing as mp
-from multiprocessing import shared_memory
-import psutil
-import serial
-
 import threading
 import queue
+import os
+import sys
+import ctypes
+import ctypes.util
+import tracker
+import cv2
+import agent_processing as ap
+import serial
+import gc
+import struct
+import tensordict
+from tensordict import TensorDict
+import torch
 
-VISION_BUFFER_SIZE = 14  # Keep last 20 vision frames
-MALLET_BUFFER_SIZE = 14  # Keep last 20 mallet states
-SHARED_DATA_SIZE = 1024  # Size in bytes for each shared memory block
+torch.set_num_threads(2)
+torch.set_num_interop_threads(1)
 
-class SharedVisionBuffer:
-    """Manages shared memory for vision data (puck and opponent mallet positions)"""
-    def __init__(self):
-        # Create shared memory for vision data
-        self.shm = shared_memory.SharedMemory(create=True, size=SHARED_DATA_SIZE, name='vision_buffer')
-        self.lock = mp.Lock()
-        
-        # Initialize buffer structure: [write_index, count, data...]
-        # data format: timestamp, puck_pos[2], op_mallet_pos[2] = 5 floats per entry
-        buffer_array = np.ndarray((1 + 1 + VISION_BUFFER_SIZE * 5,), dtype=np.float64, buffer=self.shm.buf)
-        buffer_array[0] = 0  # write_index
-        buffer_array[1] = 0  # count
 
-        for i in range(len(buffer_array)):
-            buffer_array[i] = 0
-        
-    def write(self, timestamp, puck_pos, op_mallet_pos):
-        with self.lock:
-            buffer_array = np.ndarray((1 + 1 + VISION_BUFFER_SIZE * 5,), dtype=np.float64, buffer=self.shm.buf)
-            write_idx = int(buffer_array[0])
-            count = int(buffer_array[1])
-            
-            # Write data at current index
-            start_idx = 2 + write_idx * 5
-            buffer_array[start_idx] = timestamp
-            buffer_array[start_idx + 1:start_idx + 3] = puck_pos
-            buffer_array[start_idx + 3:start_idx + 5] = op_mallet_pos
-            
-            # Update indices
-            buffer_array[0] = (write_idx + 1) % VISION_BUFFER_SIZE
-            buffer_array[1] = min(count + 1, VISION_BUFFER_SIZE)
+table_bounds = np.array([1.9885, 0.995])
+obs_dim = 51
+obs = np.zeros((obs_dim,), dtype=np.float32)
+obs[32:32+7] = np.array([0.8, 0.3, 0.6, 0.7, 0.2, 0.4, 0.03]) #wall res
+obs[32+7:32+14] = np.array([0.8, 0.3, 0.6, 0.7, 0.2, 0.4, 0.03]) #mallet res
+obs[32+14:] = np.array([ap.a1/ap.pullyR * 1e4, ap.a2/ap.pullyR * 1e1, ap.a3/ap.pullyR * 1e0, ap.b1/ap.pullyR * 1e4, ap.b2/ap.pullyR * 1e1])
+#e_n0, e_nr, e_nf, e_t0, e_tr, e_tf, std
+
+margin = 0.065
+margin_bottom = 0.1
+
+mallet_r = 0.0508
+margin_bounds = 0.0
+mallet_bounds = np.array([[margin_bounds + mallet_r, table_bounds[0]/2  + mallet_r/2], [margin_bounds+mallet_r, table_bounds[1]-margin_bounds-mallet_r]])
+
+Vmax = 24 * 0.8
+
+def set_realtime_priority():
+    os.sched_setaffinity(0, {2,3})
+    SCHED_FIFO = 1
+    sched_param = ctypes.c_int(99)
+    libc = ctypes.CDLL(ctypes.util.find_library('c'))
+    result = libc.sched_setscheduler(0, SCHED_FIFO, ctypes.byref(sched_param))
     
-    def read(self, indices=[0,1,2,5,11]):
-        """Read n_recent most recent entries plus historical entries at specified indices"""
-        with self.lock:
-            buffer_array = np.ndarray((1 + 1 + VISION_BUFFER_SIZE * 5,), dtype=np.float64, buffer=self.shm.buf)
-            write_idx = int(buffer_array[0])
-            
-            data = []
-            
-            # Get recent data
-            for i in indices:
-                idx = (write_idx - 1 - i) % VISION_BUFFER_SIZE
-                start_idx = 2 + idx * 5
-                #entry = {
-                #    'timestamp': buffer_array[start_idx],
-                #    'puck_pos': buffer_array[start_idx + 1:start_idx + 3].copy(),
-                #    'op_mallet_pos': buffer_array[start_idx + 3:start_idx + 5].copy()
-                #}
-                data.append(buffer_array[start_idx:start_idx+5].copy())
-            
-            return data
+    if result == 0:
+        print("Real-time priority set successfully")
+    else:
+        print("Failed to set real-time priority - run with sudo")
+        
+def check_isolation_status():
+    """Check if CPU isolation is working properly"""
+    print("\n=== CPU Isolation Status ===")
     
-    def cleanup(self):
-        self.shm.close()
-        self.shm.unlink()
-
-class VisionBuffer:
-
-    def __init__(self):
-        # Initialize buffer structure: [write_index, count, data...]
-        # data format: timestamp, puck_pos[2], op_mallet_pos[2] = 5 floats per entry
-        self.buffer_array = np.zeros((VISION_BUFFER_SIZE * 5,), dtype=np.float64)
-        self.write_idx = 0
-        self.count = 0
-        
-    def write(self, timestamp, puck_pos, op_mallet_pos):
-        # Write data at current index
-        start_idx = 2 + self.write_idx * 5
-        self.buffer_array[start_idx] = timestamp
-        self.buffer_array[start_idx + 1:start_idx + 3] = puck_pos
-        self.buffer_array[start_idx + 3:start_idx + 5] = op_mallet_pos
-        
-        # Update indices
-        self.write_idx = (self.write_idx + 1) % VISION_BUFFER_SIZE
-        self.count = min(self.count + 1, VISION_BUFFER_SIZE)
+    # Check isolated CPUs
+    try:
+        with open('/sys/devices/system/cpu/isolated', 'r') as f:
+            isolated = f.read().strip()
+            print(f"Isolated CPUs: {isolated}")
+    except:
+        print("No CPUs isolated")
     
-    def read(self, indices=[0,1,2,5,11]):
-        """Read n_recent most recent entries plus historical entries at specified indices"""
-            
-        data = []
-        
-        # Get recent data
-        for i in indices:
-            idx = (self.write_idx - 1 - i) % VISION_BUFFER_SIZE
-            start_idx = 2 + idx * 5
-            #entry = {
-            #    'timestamp': buffer_array[start_idx],
-            #    'puck_pos': buffer_array[start_idx + 1:start_idx + 3].copy(),
-            #    'op_mallet_pos': buffer_array[start_idx + 3:start_idx + 5].copy()
-            #}
-            data.append(self.buffer_array[start_idx:start_idx+5].copy())
-        
-        return data
-
-class SharedMalletBuffer:
-    """Manages shared memory for mallet state data"""
-    def __init__(self):
-        self.shm = shared_memory.SharedMemory(create=True, size=SHARED_DATA_SIZE, name='mallet_buffer')
-        self.lock = mp.Lock()
-        
-        # Initialize buffer: [write_index, count, data...]
-        # data format: timestamp, pos[2], vel[2], acc[2] = 7 floats per entry
-        buffer_array = np.ndarray((1 + 1 + 7 + MALLET_BUFFER_SIZE * 3,), dtype=np.float64, buffer=self.shm.buf)
-        buffer_array[0] = 0  # write_index
-        buffer_array[1] = 0  # count
-
-        for i in range(len(buffer_array)):
-            buffer_array[i] = 0
-        
-        
-    def write(self, timestamp, pos, vel, acc, buffer):
-        with self.lock:
-            buffer_array = np.ndarray((1 + 1 + MALLET_BUFFER_SIZE * 7,), dtype=np.float64, buffer=self.shm.buf)
-            buffer_array[2] = timestamp
-            buffer_array[3:5] = pos
-            buffer_array[5:7] = vel
-            buffer_array[7:9] = acc
-
-            if buffer:
-                write_idx = int(buffer_array[0])
-                count = int(buffer_array[1])
-                
-                start_idx = 9 + write_idx * 3
-                buffer_array[start_idx] = timestamp
-                buffer_array[start_idx + 1:start_idx + 3] = pos
-                
-                buffer_array[0] = (write_idx + 1) % MALLET_BUFFER_SIZE
-                buffer_array[1] = min(count + 1, MALLET_BUFFER_SIZE)
+    # Check current process CPU affinity
+    current_affinity = os.sched_getaffinity(0)
+    print(f"Process CPU affinity: {current_affinity}")
     
-    def read(self, latest, indices=None):
-        """Read the most recent mallet state"""
-        with self.lock:
-            buffer_array = np.ndarray((1 + 1 + MALLET_BUFFER_SIZE * 7,), dtype=np.float64, buffer=self.shm.buf)
-            write_idx = int(buffer_array[0])
-            count = int(buffer_array[1])
-            
-            if count == 0:
-                return None
-            
-            data = []
-
-            if latest:
-                data.append(buffer_array[2:9])
-            
-            if indices is not None:
-            # Get recent data
-                for i in indices:
-                    idx = (write_idx - 1 - i) % MALLET_BUFFER_SIZE
-                    start_idx = 9 + idx * 3
-                    data.append(buffer_array[start_idx:start_idx+3].copy())
-            
-            return data
+    # Check current CPU being used
+    try:
+        with open('/proc/self/stat', 'r') as f:
+            stat_data = f.read().split()
+            current_cpu = stat_data[38]  # processor field
+            print(f"Currently running on CPU: {current_cpu}")
+    except:
+        print("Could not determine current CPU")
     
-    def cleanup(self):
-        self.shm.close()
-        self.shm.unlink()
+    # Check other processes on our CPU
+    try:
+        pid = os.getpid()
+        result = os.popen(f'ps -eo pid,comm,psr | grep " 2$"').read()
+        print(f"Processes on CPU 2:")
+        print(result)
+    except:
+        print("Could not check processes on CPU 2")
+
 
 def configure_buffer_handling(cam):
-    # Get TLStream nodemap (this is different from the regular nodemap)
     nodemap_tldevice = cam.GetTLStreamNodeMap()
 
-    # Retrieve the buffer handling mode node
+    # --- Step 1: Set Buffer Count Mode to Manual ---
+    try:
+        buffer_size_mode = PySpin.CEnumerationPtr(nodemap_tldevice.GetNode("StreamBufferCountMode"))
+        if PySpin.IsAvailable(buffer_size_mode) and PySpin.IsWritable(buffer_size_mode):
+            manual_mode = buffer_size_mode.GetEntryByName("Manual")
+            if PySpin.IsAvailable(manual_mode) and PySpin.IsReadable(manual_mode):
+                buffer_size_mode.SetIntValue(manual_mode.GetValue())
+                print("Buffer size mode set to Manual")
+    except Exception as e:
+        print(f"Unable to set buffer size mode to Manual: {e}")
+
+    # --- Step 2: Set the Buffer Count ---
+    try:
+        buffer_count = PySpin.CIntegerPtr(nodemap_tldevice.GetNode("StreamBufferCountManual"))
+        if PySpin.IsAvailable(buffer_count) and PySpin.IsWritable(buffer_count):
+            min_val = buffer_count.GetMin()
+            print(f"Minimum allowed buffer count: {min_val}")
+            if min_val <= 2:
+                buffer_count.SetValue(2)
+                print("Buffer count set to 2")
+            else:
+                buffer_count.SetValue(min_val)
+                print(f"Buffer count set to minimum allowed: {min_val}")
+    except Exception as e:
+        print(f"Unable to set buffer count: {e}")
+
+    # --- Step 3: Set Stream Buffer Handling Mode ---
     buffer_handling_mode = PySpin.CEnumerationPtr(nodemap_tldevice.GetNode("StreamBufferHandlingMode"))
     if PySpin.IsAvailable(buffer_handling_mode) and PySpin.IsWritable(buffer_handling_mode):
-        # Set the buffer handling mode to NewestOnly
         newest_only = buffer_handling_mode.GetEntryByName("NewestOnly")
         if PySpin.IsAvailable(newest_only) and PySpin.IsReadable(newest_only):
             buffer_handling_mode.SetIntValue(newest_only.GetValue())
@@ -201,13 +131,17 @@ def configure_camera(cam, gain_val=30.0):
     # Get the camera node map
     nodemap = cam.GetNodeMap()
     
-    # Disable automatic exposure and set exposure to 100 µs
-    exposure_auto = PySpin.CEnumerationPtr(nodemap.GetNode("ExposureAuto"))
-    if PySpin.IsAvailable(exposure_auto) and PySpin.IsWritable(exposure_auto):
-        exposure_auto_off = exposure_auto.GetEntryByName("Off")
-        exposure_auto.SetIntValue(exposure_auto_off.GetValue())
-    else:
-        print("Unable to disable ExposureAuto.")
+    auto_modes = ["ExposureAuto", "GainAuto", "BalanceWhiteAuto", "GammaEnable"]
+    for mode in auto_modes:
+        try:
+            auto_node = PySpin.CEnumerationPtr(nodemap.GetNode(mode))
+            if PySpin.IsAvailable(auto_node) and PySpin.IsWritable(auto_node):
+                off_entry = auto_node.GetEntryByName("Off")
+                if PySpin.IsAvailable(off_entry):
+                    auto_node.SetIntValue(off_entry.GetValue())
+                    print(f"{mode} disabled")
+        except:
+            print("Unable to disable " + mode)
 
     exposure_time = PySpin.CFloatPtr(nodemap.GetNode("ExposureTime"))
     if PySpin.IsAvailable(exposure_time) and PySpin.IsWritable(exposure_time):
@@ -216,67 +150,57 @@ def configure_camera(cam, gain_val=30.0):
     else:
         print("Unable to set ExposureTime.")
 
-    # Disable automatic gain and set gain to 40
-    gain_auto = PySpin.CEnumerationPtr(nodemap.GetNode("GainAuto"))
-    if PySpin.IsAvailable(gain_auto) and PySpin.IsWritable(gain_auto):
-        gain_auto_off = gain_auto.GetEntryByName("Off")
-        gain_auto.SetIntValue(gain_auto_off.GetValue())
-    else:
-        print("Unable to disable GainAuto.")
-
     gain = PySpin.CFloatPtr(nodemap.GetNode("Gain"))
     if PySpin.IsAvailable(gain) and PySpin.IsWritable(gain):
         gain.SetValue(gain_val)
     else:
         print("Unable to set Gain.")
-
-def set_pixel_format(cam, format_type="mono"):
-    """
-    Set the pixel format for the camera.
+        
+    # Try to disable image processing features that add latency
+    processing_features = ["GammaEnable", "SharpnessEnable", "SaturationEnable", 
+                          "HueEnable", "DefectCorrectStaticEnable"]
     
-    Args:
-        cam: PySpin camera object
-        format_type: "mono" for grayscale, "red", "green", or "blue" for single channels
-    """
+    for feature in processing_features:
+        try:
+            feature_node = PySpin.CBooleanPtr(nodemap.GetNode(feature))
+            if PySpin.IsAvailable(feature_node) and PySpin.IsWritable(feature_node):
+                feature_node.SetValue(False)
+                print(f"{feature} disabled")
+        except:
+            print("Unable to disable " + feature)
+            
+    throughput_limit = PySpin.CIntegerPtr(nodemap.GetNode("DeviceLinkThroughputLimit"))
+    if PySpin.IsAvailable(throughput_limit) and PySpin.IsWritable(throughput_limit):
+        max_value = throughput_limit.GetMax()
+        throughput_limit.SetValue(max_value)
+        print(f"Set throughput limit to {max_value}")
+    else:
+        print("Unable to read or write throughput limit mode.")
+
+
+def set_pixel_format(cam):
     nodemap = cam.GetNodeMap()
     
-    # Get the pixel format node
     pixel_format = PySpin.CEnumerationPtr(nodemap.GetNode("PixelFormat"))
-    
-    if not PySpin.IsAvailable(pixel_format) or not PySpin.IsWritable(pixel_format):
-        print("Unable to access PixelFormat node")
-        return False
-    
-    # Define format mappings
-    format_map = {
-        "mono": "Mono8",          # 8-bit grayscale - fastest option
-        "red": "BayerRG8",        # You'd extract red channel from Bayer
-        "green": "BayerRG8",      # You'd extract green channel from Bayer  
-        "blue": "BayerRG8"        # You'd extract blue channel from Bayer
-    }
-    
-    # For true single channel, Mono8 is your best bet
-    if format_type == "mono":
-        target_format = "Mono8"
+    if PySpin.IsAvailable(pixel_format) and PySpin.IsWritable(pixel_format):
+        # Try Mono8 first (fastest)
+        format_entry = pixel_format.GetEntryByName("BayerRG8")
+        if PySpin.IsAvailable(format_entry) and PySpin.IsReadable(format_entry):
+            pixel_format.SetIntValue(format_entry.GetValue())
+            print("Pixel format set to BayerRG8")
+            
+        else:
+            print("unable to set pixel format to BayerRG8")
     else:
-        # For color cameras, you might need to use RGB8 and extract channels in software
-        target_format = "RGB8"
-    
-    # Get the desired format entry
-    format_entry = pixel_format.GetEntryByName(target_format)
-    
-    if PySpin.IsAvailable(format_entry) and PySpin.IsReadable(format_entry):
-        pixel_format.SetIntValue(format_entry.GetValue())
-        print(f"Pixel format set to {target_format}")
-        return True
+        print("Unable to read pixel format")
+        
+    ISP = PySpin.CBooleanPtr(nodemap.GetNode("IspEnable"))
+    if PySpin.IsAvailable(ISP) and PySpin.IsWritable(ISP):
+        ISP.SetValue(False)
     else:
-        print(f"Format {target_format} not available. Available formats:")
-        # List available formats
-        for i in range(pixel_format.GetNumEntries()):
-            entry = pixel_format.GetEntryByIndex(i)
-            if PySpin.IsAvailable(entry):
-                print(f"  - {entry.GetSymbolic()}")
-        return False
+        print("Unable to turn off ISP")
+
+    return False
 
 def configure_gain(cam, gain_val = 30.0):
     nodemap = cam.GetNodeMap()
@@ -286,358 +210,217 @@ def configure_gain(cam, gain_val = 30.0):
     else:
         print("Unable to set Gain.")
 
-def set_frame_rate(cam):
-    # Get the camera node map
+def set_frame_rate(cam, target_fps=120.0):
     nodemap = cam.GetNodeMap()
     
     # Enable frame rate control
     frame_rate_enable = PySpin.CBooleanPtr(nodemap.GetNode("AcquisitionFrameRateEnable"))
     if PySpin.IsAvailable(frame_rate_enable) and PySpin.IsWritable(frame_rate_enable):
         frame_rate_enable.SetValue(True)
+        print("Frame rate control enabled")
     else:
-        print("Unable to enable AcquisitionFrameRate.")
+        print("Unable to enable frame rate control")
+        return 0
 
-    # Set the frame rate to the maximum allowed
+    # Set specific frame rate
     frame_rate = PySpin.CFloatPtr(nodemap.GetNode("AcquisitionFrameRate"))
     if PySpin.IsAvailable(frame_rate) and PySpin.IsWritable(frame_rate):
-        max_frame_rate = frame_rate.GetMax()
-        frame_rate.SetValue(max_frame_rate)
-        print("AcquisitionFrameRate set to maximum: {:.2f} fps".format(max_frame_rate))
+        min_fps = frame_rate.GetMin()
+        max_fps = frame_rate.GetMax()
+        print(f"Frame rate range: {min_fps:.2f} - {max_fps:.2f} fps")
+        
+        # Set to target or maximum available
+        actual_fps = min(target_fps, max_fps)
+        frame_rate.SetValue(actual_fps)
+        print(f"Frame rate set to: {actual_fps:.2f} fps")
+        return actual_fps
     else:
-        print("Unable to set AcquisitionFrameRate.")
-
-def get_external_matrix(cam):
-    # Begin image acquisition
-    configure_gain(cam, gain_val=45.0)
-    cam.BeginAcquisition()
-    print("External started...")
+        print("Unable to set frame rate")
+        return 0
     
-    try:
-        while True:
-            # Retrieve next image with a timeout of 1000ms
-            image_result = cam.GetNextImage()
-            #if image_result.IsIncomplete():
-            #    print("Image incomplete with image status %d ..." % image_result.GetImageStatus())
-            #else:
-                # Convert image to a NumPy array (BGR or grayscale depending on your camera configuration)
-            image_data = image_result.GetNDArray()
+def set_roi(cam, width, height, offset_x=0, offset_y=0):
+    nodemap = cam.GetNodeMap()
+    
+    # Set width
+    width_node = PySpin.CIntegerPtr(nodemap.GetNode("Width"))
+    if PySpin.IsAvailable(width_node) and PySpin.IsWritable(width_node):
+        width_node.SetValue(width)
+    
+    # Set height  
+    height_node = PySpin.CIntegerPtr(nodemap.GetNode("Height"))
+    if PySpin.IsAvailable(height_node) and PySpin.IsWritable(height_node):
+        height_node.SetValue(height)
+        
+    # Set offsets
+    offset_x_node = PySpin.CIntegerPtr(nodemap.GetNode("OffsetX"))
+    if PySpin.IsAvailable(offset_x_node) and PySpin.IsWritable(offset_x_node):
+        offset_x_node.SetValue(offset_x)
+        
+    offset_y_node = PySpin.CIntegerPtr(nodemap.GetNode("OffsetY"))
+    if PySpin.IsAvailable(offset_y_node) and PySpin.IsWritable(offset_y_node):
+        offset_y_node.SetValue(offset_y)
+        
+def deq(q, xmin, xmax):
+    y = q/32767
+    return (y+1)/2 * (xmax - xmin) + xmin
+        
 
-            image_result.Release()
-
-            if setup.run_extrinsics(image_data):
-                break
-    except KeyboardInterrupt:
-        print("Image acquisition interrupted by user.")
-    finally:
-        cam.EndAcquisition()
-        print("External ended.")
-
-"""
-def image_process(cam, Normal_Mallet, rotation_matrix, translation_vector, z_pixel_map):
-    current_process = psutil.Process()
-    current_process.cpu_affinity([2, 3, 4, 5])
-
-    current_process.nice(psutil.HIGH_PRIORITY_CLASS)
-
-    if Normal_Mallet:
-        op_mallet_z = (120.94)*10**(-3)
-    else:
-        op_mallet_z = 70.44 * 10**(-3)
-
-    vision_shm = shared_memory.SharedMemory(name='vision_buffer')
-    vision_buffer = SharedVisionBuffer.__new__(SharedVisionBuffer)
-    vision_buffer.shm = vision_shm
-    vision_buffer.lock = mp.Lock()
-
-    camera_tracker = tracker.CameraTracker(rotation_matrix, translation_vector, z_pixel_map, op_mallet_z)
-
-    try:
-        while True:
-            image_result = cam.GetNextImage()
-            image_data = image_result.GetNDArray()
-            image_result.Release()
-            time_save = time.time()
-
-            puck_pos, op_mallet_pos = camera_tracker.process_frame(image_data)
-            puck_pos = np.array([ap.height - puck_pos[0], ap.width - puck_pos[1]])
-            op_mallet_pos = np.array([ap.height - op_mallet_pos[0], ap.width - op_mallet_pos[1]])
-            vision_buffer.write(time_save, puck_pos, op_mallet_pos)
-    except KeyboardInterrupt:
+def get_mallet(ser):    
+    FMT = '<hhhhhhB'    # 6×int16, 1×uint8
+    FRAME_SIZE = struct.calcsize(FMT)
+    
+    # Read entire buffer
+    while ser.in_waiting < 33:
         pass
-    vision_shm.close()
-"""
-
-def agent_process(cam, Normal_Mallet, rotation_matrix, translation_vector, z_pixel_map, writeQueue):
-
-    current_process = psutil.Process()
-    current_process.cpu_affinity([2,3,4,5,6])
-
-    current_process.nice(psutil.HIGH_PRIORITY_CLASS)
-
-    if Normal_Mallet:
-        op_mallet_z = (120.94)*10**(-3)
-    else:
-        op_mallet_z = 70.44 * 10**(-3)
-
-    #vision_shm = shared_memory.SharedMemory(name='vision_buffer')
-    mallet_shm = shared_memory.SharedMemory(name='mallet_buffer')
+    buffer = ser.read(ser.in_waiting)
     
-    #vision_buffer = SharedVisionBuffer.__new__(SharedVisionBuffer)
-    #vision_buffer.shm = vision_shm
-    #vision_buffer.lock = mp.Lock()
-    vision_buffer = VisionBuffer()
+    # Start from the last 29 bytes
+    search_buffer = buffer[-33:]
     
-    mallet_buffer = SharedMalletBuffer.__new__(SharedMalletBuffer)
-    mallet_buffer.shm = mallet_shm
-    mallet_buffer.lock = mp.Lock()
+    # Find the start marker (0xAA)
+    start_idx = -1
+    for i in range(len(search_buffer)-3):
+        if search_buffer[i] == 0xFF and search_buffer[i+1] == 0xFF and search_buffer[i+2] == 0xFF:
+            start_idx = i+2
+            break
+    
+    if start_idx == -1:
+        print("No start marker found")
+        return None, None, None, False
+    
+    # Check if we have enough bytes for a complete frame after the start marker
+    remaining_bytes = len(search_buffer) - start_idx - 1  # -1 for the start marker itself
+    if remaining_bytes < FRAME_SIZE + 1:  # +1 for end marker
+        print("Not enough bytes for complete frame")
+        return None, None, None, False
+    
+    # Extract the frame data
+    frame_start = start_idx + 1
+    frame_end = frame_start + FRAME_SIZE
+    raw = search_buffer[frame_start:frame_end]
+    
+    # Check end marker
+    if frame_end >= len(search_buffer) or search_buffer[frame_end] != 0x55:
+        print(buffer)
+        print("Invalid end marker")
+        return None, None, None, False
+    
+    # Unpack the data
+    p0, p1, v0, v1, a0, a1, chk = struct.unpack(FMT, raw)
 
-    camera_tracker = tracker.CameraTracker(rotation_matrix, translation_vector, z_pixel_map, op_mallet_z)
+    # Verify checksum
+    c = 0
+    for b in raw[:-1]:
+        c ^= b
+    if c != chk:
+        print("bad checksum", c, chk)
+        return None, None, None, False
+    
+    pos = np.array([deq(p0, -1, 2), deq(p1, -1, 2)])
+    vel = np.array([deq(v0, 0, 40), deq(v1, 0, 40)])
+    acc = np.array([deq(a0, -150, 150), deq(a1, -150, 150)])
+    
+    return pos, vel, acc, True
 
+def main_loop(cam, N_TESTS=500):
+    
+    PORT = '/dev/ttyUSB0'  # Adjust this to COM port or /dev/ttyUSBx
+    BAUD = 460800
+
+    # === CONNECT ===
+    ser = serial.Serial(PORT, BAUD, timeout=0)
+
+    time.sleep(1)
+    
     cam.BeginAcquisition()
-
+    
+    # Warm up - discard first few frames
+    img_shape = (1536, 1296)
+    
+    image = cam.GetNextImage()
+    img = image.GetData().reshape(img_shape)
+    image.Release()
+    
+    setup = tracker.SetupCamera()
+    #Replace with actual setup image
+    setup_img = cv2.imread("jump_bright.bmp", cv2.IMREAD_GRAYSCALE)[:,376:376+1296]
+    setup.run_extrinsics(setup_img)
+    
+    track = tracker.CameraTracker(setup.rotation_matrix,
+                                  setup.translation_vector,
+                                  setup.z_pixel_map,
+                                  (120.94)*10**(-3))
+    del setup
+    del setup_img
+    loaded_img = cv2.imread("jump.bmp", cv2.IMREAD_GRAYSCALE)[:,376:376+1296]
+    
+    ser.write(b'\n')
+    while ser.in_waiting == 0:
+        continue
+    #time.sleep(0.1)
+    #print(ser.read(ser.in_waiting))
+    ser.write(b'\n')
+    
+    gc.collect()
+    
+    dt = 4.0768/1000
     while True:
-        #vision_data = vision_buffer.read()
-        image_result = cam.GetNextImage()
-        image_data = image_result.GetNDArray()
-        image_result.Release()
-        time_save = time.time()
+        image = cam.GetNextImage()
+        img = image.GetData().reshape(img_shape)
+        track.process_frame(loaded_img)
+        image.Release()
+        
+        passed = False
+        while not passed:
+            pos, vel, acc, passed = get_mallet(ser)
+                
+        obs[:20] = track.past_data.get()
+        obs[24:26] = obs[20:22] #update past mallet
+        obs[26:28] = obs[22:24]
+        obs[20:22] = np.array([0.5, 0.5]) #add current mallet pos
+        obs[22:24] = np.array([0,0.3])
 
-        puck_pos, op_mallet_pos = camera_tracker.process_frame(image_data)
-        puck_pos = np.array([ap.height - puck_pos[0], ap.width - puck_pos[1]])
-        op_mallet_pos = np.array([ap.height - op_mallet_pos[0], ap.width - op_mallet_pos[1]])
-        vision_buffer.write(time_save, puck_pos, op_mallet_pos)
-        vision_data = vision_buffer.read()
-        mallet_data = mallet_buffer.read()
-        for data in vision_data:
-            for i in range(len(data)):
-                if data[i] == 0:
-                    continue
-        for data in mallet_data:
-            for i in range(len(data)):
-                if data[i] == 0:
-                    continue
-        break
+        tensor_obs = TensorDict({"observation": torch.tensor(obs, dtype=torch.float32)})       
+        
+        with torch.no_grad():
+            policy_out = ap.policy_module(tensor_obs)
 
-    writeQueue.put("got_init\n".encode())
+        action = policy_out["action"].detach().numpy()
+        xf = action[:2]
 
-    time.sleep(0.2)
+        xf[0] = np.maximum(margin_bottom+mallet_r, xf[0])
+        xf[0] = np.minimum(table_bounds[0]/2-mallet_r, xf[0])
 
-    mallet_data = mallet_buffer.read(True)
+        xf[1] = np.maximum(margin+mallet_r, xf[1])
+        xf[1] = np.minimum(table_bounds[1]-margin-mallet_r, xf[1])
 
-    data = ap.update_path(mallet_data[1:3], mallet_data[3:5], mallet_data[5:7], [0.3,0.47], [5,5])
-    writeQueue.put(b'\n' + data + b'\n')
-    time.sleep(0.1)
-
-    try:
-        while True:
-            image_result = cam.GetNextImage()
-            image_data = image_result.GetNDArray()
-            image_result.Release()
-            time_save = time.time()
-
-            puck_pos, op_mallet_pos = camera_tracker.process_frame(image_data)
-            puck_pos = np.array([ap.height - puck_pos[0], ap.width - puck_pos[1]])
-            op_mallet_pos = np.array([ap.height - op_mallet_pos[0], ap.width - op_mallet_pos[1]])
-            vision_buffer.write(time_save, puck_pos, op_mallet_pos)
-
-            vision_data = vision_buffer.read()
-            mallet_data = mallet_buffer.read(True, indices=[3, 6, 9, 12])
-            ap.take_action(vision_data, mallet_data, mallet_buffer, writeQueue)
-
-            image_result = cam.GetNextImage()
-            image_data = image_result.GetNDArray()
-            image_result.Release()
-            time_save = time.time()
-
-            puck_pos, op_mallet_pos = camera_tracker.process_frame(image_data)
-            puck_pos = np.array([ap.height - puck_pos[0], ap.width - puck_pos[1]])
-            op_mallet_pos = np.array([ap.height - op_mallet_pos[0], ap.width - op_mallet_pos[1]])
-            vision_buffer.write(time_save, puck_pos, op_mallet_pos)
-    except KeyboardInterrupt:
-        pass
-
-    #vision_shm.close()
-    mallet_shm.close()
-
-def serial_io(ser, writeQueue):
-    current_process = psutil.Process()
-    current_process.cpu_affinity([7,8])    
-
-    current_process.nice(psutil.HIGH_PRIORITY_CLASS)
-
-    mallet_shm = shared_memory.SharedMemory(name='mallet_buffer')
-    mallet_buffer = SharedMalletBuffer.__new__(SharedMalletBuffer)
-    mallet_buffer.shm = mallet_shm
-    mallet_buffer.lock = mp.Lock()
-
-    past_time = time.time()
-    try:
-        while True:
-            # Handle writes
-            try:
-                ser.write(writeQueue.get_nowait())
-            except:
-                pass
-
-            # Handle reads
-            if ser.in_waiting:
-                pos, vel, acc, passed = ap.get_mallet(ser)
-                if passed:
-                    curr_time = time.time()
-                    if curr_time - past_time > 0.01:
-                        mallet_buffer.write(time.time(), pos, vel, acc, True)
-                        past_time = curr_time
-                    else:
-                        mallet_buffer.write(time.time(), pos, vel, acc, False)
-                        
-    except KeyboardInterrupt:
-        pass
-    mallet_shm.close()
-
-def init_processes(cam, Normal_Mallet):
-
-    #vision_buffer = SharedVisionBuffer()
-    mallet_buffer = SharedMalletBuffer()
-
-    ser = serial.Serial('COM3', 460800, timeout=0)
-
-    if ser.in_waiting:
-        ser.read(ser.in_waiting).decode('utf-8')
-    ser.write(b'1')
-
-    ap.mallet_calibration(ser)
-    ap.nn_mode(ser)
-
-    writeQueue = mp.Queue()
-
-    serial_process = mp.Process(target=serial_io, args=(ser, writeQueue))
-
-    #camera_process = mp.Process(target=image_process, args=(cam,
-    #                                                 Normal_Mallet,
-    #                                                 setup.rotation_matrix,
-    #                                                 setup.translation_vector,
-    #                                                 setup.z_pixel_map))
-    
-    agent_process = mp.Process(target=agent_process, args=(cam,
-                                                           Normal_Mallet,
-                                                           setup.rotation_matrix,
-                                                           setup.translation_vector,
-                                                           setup.z_pixel_map,
-                                                           writeQueue))
-
-    serial_process.start()
-
-    cam.BeginAcquisition()
-    print("Camera acquisition started...")
-    
-    # Start the process
-    #camera_process.start()
-    agent_process.start()
-
-    try:
-        serial_process.join()
-        #camera_process.join()
-        agent_process.join()
-    except KeyboardInterrupt:
-        print("shutting down...")
-        serial_process.terminate()
-        #camera_process.terminate()
-        agent_process.terminate()
-    finally:
-        #vision_buffer.cleanup()
-        mallet_buffer.cleanup()
-
-def get_calibration_data(cam,j):
-    configure_gain(cam, gain_val=30.0)
-    cam.BeginAcquisition()
-    print("Beginning puck data collection: x axis")
-    pxls = []
-    i = 0
-    while i < 5+4+5+4+15:
-        if i < 5:
-            print(f"Place puck on x axis | {i+1}/5 [Enter]")
-        elif i < 5+4:
-            print(f"Place puck on y axis | {i-5+1}/4")
-        elif i < 5+4+5:
-            print(f"Place puck on offset x axis | {i+1-5-4}/5 [Enter]")
-        elif i < 5+4+5+4:
-            print(f"Place puck on offset y axis | {i+1-5-4-5}/4 [Enter]")
-        else:
-            print(f"Place puck on circle {i+1-5-4-5-4} | [Enter]")
-        input()
-        image_result = cam.GetNextImage()
-        image_data = image_result.GetNDArray()
-        pxl = setup.get_puck_pixel(image_data)
-        if pxl is None:
-            i -= 1
-            print("Can not detect puck, retry")
-        else:
-            pxls.append(pxl)
-        i += 1
-
-    np.save(f"puck_pxls_{j}.npy", np.array(pxls))
+        Vo = action[3] * Vmax * np.array([1+action[2],1-action[2]])
+        obs[28:32] = np.concatenate([xf, Vo], axis=0)
+        
+        passed = False
+        while not passed:
+            pos, vel, acc, passed = get_mallet(ser)
+                            
+        new_pos = pos + vel * dt + 0.5 * acc * dt**2
+        new_vel = vel + acc * dt
+        data = ap.update_path(new_pos, new_vel, acc, xf, Vo)
+        ser.write(b'\n' + data + b'\n')
+        
+        image = cam.GetNextImage()
+        img = image.GetData().reshape(img_shape)
+        track.process_frame(loaded_img)
+        image.Release()
 
     cam.EndAcquisition()
 
-    configure_gain(cam, gain_val=45.0)
-
-    cam.BeginAcquisition()
-
-    while True:
-        print("Finding Aruco Points, Move Hand Away [Enter]")
-        input()
-        image_result = cam.GetNextImage()
-        image_data = image_result.GetNDArray()
-        if setup.see_aruco_pixels(image_data):
-            np.save(f"img_data_{j}.npy", image_data)
-            cam.EndAcquisition()
-            print("success")
-            return 
-        print("Did not detect Aruco Markers, try again")
-
-def getArucoPosSaved(n):
-    pxls = np.load("puck_pxls_1.npy")
-    image_data = np.load("img_data_1.npy")
-    imgs = [image_data]
-
-    for i in range(2, n+1):
-        pxls_i = np.load(f"puck_pxls_{i}.npy")
-        image_data_i = np.load(f"img_data_{i}.npy")
-        pxls = np.vstack((pxls, pxls_i))
-        imgs.append(image_data_i)
-
-    puck_pxls_wall_x = np.zeros((n*10,2), dtype=np.float32)
-    puck_pxls_wall_y = np.zeros((n*8,2), dtype=np.float32)
-    puck_pxls_location = np.zeros((n*15, 2), dtype=np.float32)
-    for i in range(n):
-        puck_pxls_wall_x[10*i:10*i+5] = pxls[33*i:33*i+5]
-        puck_pxls_wall_y[8*i:8*i+4] = pxls[33*i+5:33*i+9]
-        puck_pxls_wall_x[10*i+5:10*i+10] = pxls[33*i+9:33*i+14]
-        puck_pxls_wall_y[8*i+4:8*i+8] = pxls[33*i+14:33*i+18]
-        puck_pxls_location[15*i:15*i+15] = pxls[33*i+18:33*i+33]
-
-    while True:
-        if setup.measure_extrinsics(imgs, puck_pxls_wall_x, puck_pxls_wall_y, puck_pxls_location):
-                return 
-        else:
-            print("did not detect aruco")
 
 
 def main():
-    Get_calibration_data = False
-    Solve_externals_and_zparams = False
-
-    Normal_Mallet = False
-    Print_Values = False
-    Visual_Display = False
-
-    #198.85  - 71.05 = 127.8 x
-    #27.575
-
-    if Solve_externals_and_zparams and not Get_calibration_data:
-        getArucoPosSaved(3)
+    if os.geteuid() != 0:
+        print("Warning: Not running as root. Real-time performance may be limited.")
+        print("Run with: sudo python3 script.py")
         return
-
+    
     system = PySpin.System.GetInstance()
     
     # Retrieve list of cameras from the system
@@ -648,34 +431,27 @@ def main():
         print("No cameras detected!")
         cam_list.Clear()
         system.ReleaseInstance()
-        sys.exit(1)
+        return
     
     # Select the first camera
     cam = cam_list.GetByIndex(0)
-    
     try:
         cam.Init()
-        configure_buffer_handling(cam)
-        set_frame_rate(cam)
-        configure_camera(cam)
-        set_pixel_format(cam, "mono")
-
-        if Get_calibration_data:
-            get_calibration_data(cam, 4)
-            cam_list.Clear()
-            system.ReleaseInstance()
-            sys.exit(1)
+        set_realtime_priority()
         
-        get_external_matrix(cam)
+        check_isolation_status()
+        
+        configure_buffer_handling(cam)
+        configure_camera(cam)
+        set_pixel_format(cam)
+        set_roi(cam,1296,1536,376,0)
+        set_frame_rate(cam)
 
-        configure_gain(cam, gain_val=30.0)
-        init_processes(cam, Normal_Mallet)
-        cam.DeInit()
+        main_loop(cam)
+
     except Exception as ex: #PySpin.SpinnakerException as ex:
         print("Error: %s" % ex)
     finally:
-        cam.BeginAcquisition()
-        time.sleep(0.01)
         cam.EndAcquisition()
         cam.DeInit()
         del cam
@@ -683,8 +459,5 @@ def main():
         system.ReleaseInstance()
 
 if __name__ == "__main__":
-    setup = tracker.SetupCamera()
     main()
 
-#(58.45+64.7)/2 = 61.575
-#(29.45+35.7)/2 = 32.575

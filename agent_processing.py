@@ -26,8 +26,8 @@ Vmax = 24 * 0.8
 table_bounds = np.array([height, width])
 
 mallet_r = 0.1011 / 2
-margin_bounds = 0.1
-mallet_bounds = np.array([[margin_bounds + mallet_r, table_bounds[0]/2  + mallet_r/2], [margin_bounds+mallet_r, table_bounds[1]-margin_bounds-mallet_r]])
+margin_bounds = 0.02
+mallet_bounds = np.array([[margin_bounds + mallet_r, table_bounds[0]/2  - mallet_r/2], [margin_bounds+mallet_r, table_bounds[1]-margin_bounds-mallet_r]])
 
 
 class ScaledNormalParamExtractor(NormalParamExtractor):
@@ -64,7 +64,7 @@ policy_module = TensorDictModule(
 )
 
 low = torch.tensor([mallet_r + 0.01, mallet_r + 0.01, 0, -1], dtype=torch.float32)
-high = torch.tensor([bounds[0]/2-mallet_r-0.01, bounds[1]-mallet_r-0.01, 1, 1], dtype=torch.float32)
+high = torch.tensor([table_bounds[0]/2-mallet_r-0.01, table_bounds[1]-mallet_r-0.01, 1, 1], dtype=torch.float32)
 
 policy_module = ProbabilisticActor(
     module=policy_module,
@@ -79,7 +79,10 @@ policy_module = ProbabilisticActor(
 # Vx + Vy < 2*(Vmax)
 # sqrt(2* (2*Vmax)^2)
 
-#policy_module.load_state_dict(torch.load("policy_weights8.pth")) #8
+checkpoint = torch.load("model_183.pth", map_location="cpu")
+policy_module.load_state_dict(checkpoint['policy_state_dict'])
+del checkpoint
+#policy_module.load_state_dict(torch.load("model_183.pth"), map_location=torch.device("cpu")) #8
 #policy_module.eval()
 
 pullyR = 0.035686666463209935
@@ -231,7 +234,7 @@ def solve_C1n(x, k):
     return C2[k]/C7[k] - (x[0]/(ab[k][1]*C7[k])*\
                 math.log((x[0]*CE[k][3])/(-x[0]*CE[k][1]+C2[k]*A2CE[k][1]+C3[k]*A3CE[k][1]+C4[k]*A4CE[k][1]))) - mallet_bounds[k][0]
 
-def update_path(x_0, x_p, x_pp, x_f, Vo, light_on=0):
+def update_path(x_0, x_p, x_pp, x_f, Vo):
     global C1
     global C2
     global C3
@@ -283,6 +286,9 @@ def update_path(x_0, x_p, x_pp, x_f, Vo, light_on=0):
         sum = Vmin[0] + Vmin[1] + 0.0001
         Vmin[0] *= 2*Vmax/sum
         Vmin[1] *= 2*Vmax/sum
+    #print("--")   
+    #print(Vmin)
+    #print(Vo)
 
     err_str = "None"
     if Vo[0] > Vmin[0] and Vo[1] > Vmin[1] and Vo[1] + Vo[0] < 2*Vmax:

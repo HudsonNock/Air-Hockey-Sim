@@ -17,6 +17,7 @@ import tensordict
 from tensordict import TensorDict
 import torch
 import agent_processing as ap
+import argparse
 
 torch.set_num_threads(2)
 torch.set_num_interop_threads(1)
@@ -24,13 +25,14 @@ torch.set_num_interop_threads(1)
 table_bounds = np.array([1.993, 0.992])
 obs_dim = 51
 obs = np.zeros((obs_dim,), dtype=np.float32)
-obs[32:32+7] = np.array([0.8, 0.3, 0.6, 0.7, 0.2, 0.4, 0.03]) #wall res
-obs[32+7:32+14] = np.array([0.8, 0.3, 0.6, 0.7, 0.2, 0.4, 0.03]) #mallet res
+obs[32:32+14] = np.array([[0.75, 0.01, 0.7, 0.7, 0.01, 0.65, 0.02, 0.8, 0.01, 0.75, 0.74, 0.01, 0.73, 0.02]])
+#obs[32+7:32+14] = np.array([0.8, 0.3, 0.6, 0.7, 0.2, 0.4, 0.03]) #mallet res
 obs[32+14:] = np.array([ap.a1/ap.pullyR * 1e4, ap.a2/ap.pullyR * 1e1, ap.a3/ap.pullyR * 1e0, ap.b1/ap.pullyR * 1e4, ap.b2/ap.pullyR * 1e1])
+obs[32+14:] *= 1.2
 #e_n0, e_nr, e_nf, e_t0, e_tr, e_tf, std
 
-margin = 0.1
-margin_bottom = 0.1
+margin = 0.03
+margin_bottom = 0.03
 
 mallet_r = 0.1011 / 2
 puck_r = 0.0629 / 2
@@ -338,11 +340,14 @@ def get_mallet(ser):
     
     return pos, vel, acc, True
 
-def object_loc(cam):
+def system_loop(cam, load, pro):
     """Optimized timing measurement with minimal overhead"""
     
     # Disable garbage collection during measurement
-
+    img_shape = (1536, 1296)
+    opponent_mallet_z = 68.35*10**(-3)
+    if not pro:
+        opponent_mallet_z = 120.94*10**(-3)
     try:
     
         PORT = '/dev/ttyUSB0'  # Adjust this to COM port or /dev/ttyUSBx
@@ -350,44 +355,34 @@ def object_loc(cam):
 
         # === CONNECT ===
         ser = serial.Serial(PORT, BAUD, timeout=0)
-        
-        time.sleep(1)
-        
-        set_pixel_format(cam, mode="Mono8")
-        configure_camera(cam, gain_val=10.0, exposure_val=6000.0)
-        set_frame_rate(cam, target_fps=20.0)
-        
-        cam.BeginAcquisition()
-        
-        # Warm up - discard first few frames
-        img_shape = (1536, 1296)
+        if not load:
+            time.sleep(1)
+            
+            set_pixel_format(cam, mode="Mono8")
+            configure_camera(cam, gain_val=10.0, exposure_val=6000.0)
+            set_frame_rate(cam, target_fps=20.0)
+            
+            cam.BeginAcquisition()
 
-        image = cam.GetNextImage()
-        img = image.GetData().reshape(img_shape)
-        image.Release()
-        
-        setup = tracker.SetupCamera()
-        while not setup.run_extrinsics(img):
-            cv2.imshow("arucos", img[::2, ::2])
-            cv2.waitKey(0)
             image = cam.GetNextImage()
             img = image.GetData().reshape(img_shape)
             image.Release()
             
-        cv2.destroyAllWindows()
-        
-        cam.EndAcquisition()
-        
-        track = tracker.CameraTracker(setup.rotation_matrix,
-                                      setup.translation_vector,
-                                      setup.z_pixel_map,
-                                      68.35*10**(-3)) #70.44*10**(-3)) #(120.94)*10**(-3))
-                                      
+            setup = tracker.SetupCamera()
+            while not setup.run_extrinsics(img):
+                cv2.imshow("arucos", img[::2, ::2])
+                cv2.waitKey(0)
+                image = cam.GetNextImage()
+                img = image.GetData().reshape(img_shape)
+                image.Release()
+                
+            cv2.destroyAllWindows()
+            
+            cam.EndAcquisition()
+            
         set_pixel_format(cam, mode="BayerRG8")
         configure_camera(cam, gain_val=35.0, exposure_val=100.0)
         set_frame_rate(cam, target_fps=120.0)
-        
-        del setup
         
         ser.write(b'\n')
         while ser.in_waiting == 0:
@@ -403,11 +398,104 @@ def object_loc(cam):
             continue
         ser.read(ser.in_waiting)
         
+        input("Remove calibration device")
+        
+        ser.write(b'\n')
+        
+        while ser.in_waiting == 0:
+            continue
+        ser.read(ser.in_waiting)
+        
+        input("Turn on Power to Motors")
+
+        ser.write(b'\n')
+        
+        while ser.in_waiting == 0:
+            continue
+        ser.read(ser.in_waiting)
+
+        
+        input("Enter to Start")
+        
         gc.collect()
         
         cam.BeginAcquisition()
+        track = None
+        if not load:
+            xf = np.array([0.7, 0.2])
+            Vo = np.array([5, 5])
+            
+            passed = False
+            while not passed:
+                pos, vel, acc, passed = get_mallet(ser)
+
+            data = ap.update_path(pos, vel, acc, xf, Vo)
+
+            ser.write(b'\n' + data + b'\n')
+
+            time.sleep(1)
+            
+            image = cam.GetNextImage()
+            img = image.GetData().reshape(img_shape)
+            image.Release()
+            
+            y_max = np.max(img[:, int(img.shape[1]/2-30):int(img.shape[1]/2+30)], axis=1)
+            cutoff = np.array([np.max(y_max[max(0,i-30):min(i+30, len(y_max))]) for i in range(len(y_max))])
+            
+            xf = np.array([0.2, 0.2])
+            Vo = np.array([5, 5])
+            
+            passed = False
+            while not passed:
+                pos, vel, acc, passed = get_mallet(ser)
+
+            data = ap.update_path(pos, vel, acc, xf, Vo)
+
+            ser.write(b'\n' + data + b'\n')
+            
+            time.sleep(1)
+            
+            image = cam.GetNextImage()
+            img = image.GetData().reshape(img_shape)
+            image.Release()
+            
+            y_max = np.max(img[:, int(img.shape[1]/2-30):int(img.shape[1]/2+30)], axis=1)
+            cutoff = np.maximum(cutoff, np.array([np.max(y_max[max(0,i-30):min(i+30, len(y_max))]) for i in range(len(y_max))]))
+            
+            del y_max
         
+            track = tracker.CameraTracker(setup.rotation_matrix,
+                                          setup.translation_vector,
+                                          setup.z_pixel_map,
+                                          68.35*10**(-3),
+                                          cutoff)
+                                      
+            np.savez("setup_data.npz",
+                    rotation_matrix=setup.rotation_matrix,
+                    translation_vector=setup.translation_vector,
+                    z_pixel_map=setup.z_pixel_map,
+                    cutoff=cutoff)
+                                      
+            del setup
+        else:
+            setup_data = np.load("setup_data.npz")
+            track = tracker.CameraTracker(setup_data["rotation_matrix"],
+                                          setup_data["translation_vector"],
+                                          setup_data["z_pixel_map"],
+                                          opponent_mallet_z,
+                                          setup_data["cutoff"])
+
+        gc.collect()
+        
+        for _ in range(20):
+            image = cam.GetNextImage()
+            img = image.GetData().reshape(img_shape)
+            track.process_frame(img)
+            image.Release()
+            
         dt = 4.0768/1000
+        #top = False
+        #timer = time.perf_counter()
         while True:
         
             image = cam.GetNextImage()
@@ -426,36 +514,64 @@ def object_loc(cam):
             obs[22:24] = vel
             
             tensor_obs = TensorDict({"observation": torch.tensor(obs, dtype=torch.float32)})
+            #print("--")
+            #print(obs)
                            
             with torch.no_grad():
             	policy_out = ap.policy_module(tensor_obs)
 
             action = policy_out["action"].detach().numpy()
-            xf = action[:2]
+            obs[28:32] = action
+            #print(action)
+            no_update = (np.linalg.norm(obs[20:22] - obs[24:26]) < 0.01) and (np.linalg.norm(obs[28:30] - action[:2]) < 0.01) and (np.linalg.norm(action[:2] - obs[20:22]) < 0.01)
+            
+            if not no_update:
+                #print('--')
+                #print(obs)
+                #print(action)
+                xf = action[:2]
 
-            xf[0] = np.maximum(margin_bottom+mallet_r, xf[0])
-            xf[0] = np.minimum(table_bounds[0]/2-mallet_r, xf[0])
+                xf[0] = np.maximum(margin_bottom+mallet_r, xf[0])
+                xf[0] = np.minimum(table_bounds[0]/2-mallet_r, xf[0])
 
-            xf[1] = np.maximum(margin+mallet_r, xf[1])
-            xf[1] = np.minimum(table_bounds[1]-margin-mallet_r, xf[1])
+                xf[1] = np.maximum(margin+mallet_r, xf[1])
+                xf[1] = np.minimum(table_bounds[1]-margin-mallet_r, xf[1])
+                
+                #if time.perf_counter() - timer > 4:
+                #    top = not top
+                #    timer = time.perf_counter()
+                
+                #if top:
+                #    xf[0] = table_bounds[0]/2 - 0.25
+                #    xf[1] = table_bounds[1]/2
+                #else:
+                #    xf[0] = 0.25
+                #    xf[1] = table_bounds[1]/2
+                
 
-            Vo = action[3] * Vmax * np.array([1+action[2],1-action[2]])
-            Vo[0] = np.minimum(Vo[0], 3)
-            Vo[1] = np.minimum(Vo[1], 3)
-            obs[28:32] = np.concatenate([xf, Vo], axis=0)
-            passed = False
-            while not passed:
-                pos, vel, acc, passed = get_mallet(ser)
+                Vo = action[2] * Vmax * np.array([1+action[3],1-action[3]])
+                #Vo[0] = np.minimum(Vo[0], 15)
+                #Vo[1] = np.minimum(Vo[1], 15)
+                #print("A")
+                #print(xf)
+                #print(Vo)
+                
+                #Vo[0] = 7
+                #Vo[1] = 7
+                #obs[28:32] = np.concatenate([xf, Vo], axis=0)
+                passed = False
+                while not passed:
+                    pos, vel, acc, passed = get_mallet(ser)
 
-            new_pos = pos + vel * dt + 0.5 * acc * dt**2
-            new_vel = vel + acc * dt
-            data = ap.update_path(pos, vel, acc, xf, Vo, light_on=light_signal)
+                new_pos = pos + vel * dt + 0.5 * acc * dt**2
+                new_vel = vel + acc * dt
+                data = ap.update_path(new_pos, new_vel, acc, xf, Vo)
 
-            ser.write(b'\n' + data + b'\n')
+                ser.write(b'\n' + data + b'\n')
             
             image = cam.GetNextImage()
             img = image.GetData().reshape(img_shape)
-            track.process_frame(loaded_img)
+            track.process_frame(img)
             image.Release()
         
         cam.EndAcquisition()
@@ -463,12 +579,27 @@ def object_loc(cam):
         print("err")
         print(e)
 
+def str2bool(v):
+    if isinstance(v, bool):
+        return v
+    if v.lower() in ('yes', 'true', 't', '1'):
+        return True
+    elif v.lower() in ('no', 'false', 'f', '0'):
+        return False
+    else:
+        raise argparse.ArgumentTypeError('Boolean value expected.')
+
 
 def main():
     if os.geteuid() != 0:
         print("Warning: Not running as root. Real-time performance may be limited.")
         print("Run with: sudo python3 script.py")
         return
+        
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--load", type=str2bool, default=False)
+    parser.add_argument("--pro", type=str2bool, default=False)
+    args = parser.parse_args()
     
     system = PySpin.System.GetInstance()
     
@@ -493,7 +624,7 @@ def main():
         configure_buffer_handling(cam)
         set_roi(cam,1296,1536,376,0)
 
-        object_loc(cam)
+        system_loop(cam, args.load, args.pro)
 
     except Exception as ex: #PySpin.SpinnakerException as ex:
         print("Error: %s" % ex)

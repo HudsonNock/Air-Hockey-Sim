@@ -389,8 +389,9 @@ def begin_calibrations(cam):
         while ser.in_waiting == 0:
             continue
         ser.read(ser.in_waiting)
-            
-        input("Place mallet bottom left")
+        
+        input("Remove calibration device")
+        
         ser.write(b'\n')
         
         while ser.in_waiting == 0:

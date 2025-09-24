@@ -129,7 +129,7 @@ class SetupCamera:
         return True
 
 class CameraTracker:
-    def __init__(self, rotation_matrix, translation_vector, z_pixel_map, op_mallet_z):
+    def __init__(self, rotation_matrix, translation_vector, z_pixel_map, op_mallet_z, cutoff):
         self.intrinsic_matrix = np.array([[1.63911836e+03, 0.0, 1.01832305e+03],
                                 [0.0, 1.63894064e+03, 7.72656464e+02],
                                 [0.0, 0.0, 1.0]])
@@ -153,12 +153,16 @@ class CameraTracker:
         self.x_offset = 376
         
         self.bounds = [1.993, 0.992] 
+        self.thresh_map = np.minimum(np.tile(cutoff[:,None], (1,1296)), 225) + 25
         
         self.mask = np.empty((1536,1296), dtype=np.uint8)
 
     def track(self, frame):
         
-        cv2.inRange(frame, 230, 255, dst=self.mask)
+        #cv2.inRange(frame, 230, 255, dst=self.mask)
+        cv2.compare(frame, self.thresh_map, cv2.CMP_GE, dst=self.mask)
+        #cv2.imshow("mask", self.mask[::2, ::2])
+        #cv2.waitKey(1)
 
         contours, _ = cv2.findContours(self.mask, cv2.RETR_TREE, cv2.CHAIN_APPROX_NONE)
 
@@ -199,8 +203,8 @@ class CameraTracker:
                         self.op_mallet_z,
                         self.z_pixel_map)[0:2]
             elif self.mask[img_pos_int[1], img_pos_int[0] - self.x_offset] != 0:
-                if puck_center is not None:
-                    print(np.linalg.norm(puck_center - img_pos))
+                #if puck_center is not None:
+                #    print(np.linalg.norm(puck_center - img_pos))
                 if ((puck_center is None) or (np.linalg.norm(puck_center - img_pos) < 50)):
                     joins += 1
                     if puck_center is None:

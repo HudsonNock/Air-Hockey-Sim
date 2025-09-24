@@ -16,6 +16,7 @@ import struct
 import tensordict
 from tensordict import TensorDict
 import torch
+import argparse
 
 torch.set_num_threads(2)
 torch.set_num_interop_threads(1)
@@ -369,21 +370,64 @@ def object_loc(cam):
         cv2.destroyAllWindows()
         
         cam.EndAcquisition()
-        
-        track = tracker.CameraTracker(setup.rotation_matrix,
-                                      setup.translation_vector,
-                                      setup.z_pixel_map,
-                                      68.35*10**(-3)) #70.44*10**(-3)) #(120.94)*10**(-3))
                                       
         set_pixel_format(cam, mode="BayerRG8")
         configure_camera(cam, gain_val=35.0, exposure_val=100.0)
         set_frame_rate(cam, target_fps=120.0)
         
-        del setup
-        
-        gc.collect()
+        print("Remove mallet + puck from view")
+        input()
         
         cam.BeginAcquisition()
+        
+        image = cam.GetNextImage()
+        img = image.GetData().reshape(img_shape)
+        image.Release()
+        
+        y_max = np.max(img[:, int(img.shape[1]/2-30):int(img.shape[1]/2+30)], axis=1)
+        cutoff = np.array([np.max(y_max[max(0,i-30):min(i+30, len(y_max))]) for i in range(len(y_max))])
+        
+        #cutoff_thres = np.minimum(np.tile(cutoff[:,None], (1,1296)), 225) + 25
+        #cv2.imshow("thresh", cutoff_thres[::2, ::2])
+        #cv2.imshow("img", img[::2, ::2])
+        #cv2.waitKey(0)
+        print("Move mallet up or down")
+        input()
+        
+        del y_max
+        
+        for _ in range(10):
+            image = cam.GetNextImage()
+            img = image.GetData().reshape(img_shape)
+            image.Release()
+        
+        y_max2 = np.max(img[:, int(img.shape[1]/2-30):int(img.shape[1]/2+30)], axis=1)
+        cutoff2 = np.array([np.max(y_max2[max(0,i-30):min(i+30, len(y_max2))]) for i in range(len(y_max2))])
+        
+        #cutoff_thres = np.minimum(np.tile(cutoff2[:,None], (1,1296)), 225) + 25
+        #cv2.imshow("thresh", cutoff_thres[::2, ::2])
+        #cv2.imshow("img", img[::2, ::2])
+        #cv2.waitKey(0)
+        
+        cutoff = np.maximum(cutoff, cutoff2)
+        #cutoff_thres = np.minimum(np.tile(cutoff[:,None], (1,1296)), 225) + 25
+        #cv2.imshow("thresh", cutoff_thres[::2, ::2])
+        #cv2.waitKey(0)
+        
+        del y_max2
+        del cutoff2
+        
+                
+        track = tracker.CameraTracker(setup.rotation_matrix,
+                                      setup.translation_vector,
+                                      setup.z_pixel_map,
+                                      68.35*10**(-3), #70.44*10**(-3)) #(120.94)*10**(-3))
+                                      cutoff)
+                                      
+        del setup
+        del cutoff
+        
+        gc.collect()
         
         while True:
             
@@ -399,6 +443,16 @@ def object_loc(cam):
     except Exception as e:
         print("err")
         print(e)
+        
+def str2bool(v):
+    if isinstance(v, bool):
+        return v
+    if v.lower() in ('yes', 'true', 't', '1'):
+        return True
+    elif v.lower() in ('no', 'false', 'f', '0'):
+        return False
+    else:
+        raise argparse.ArgumentTypeError('Boolean value expected.')
 
 
 def main():

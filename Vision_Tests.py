@@ -174,8 +174,8 @@ def configure_camera(cam, gain_val=30.0, exposure_val=100.0):
     try:
         balance_ratio = PySpin.CFloatPtr(nodemap.GetNode("BalanceRatio"))
         if PySpin.IsAvailable(balance_ratio) and PySpin.IsWritable(balance_ratio):
-            balance_ratio.SetValue(3.3)
-            print("balance ratio set to 3.3")
+            balance_ratio.SetValue(3.6)
+            print("balance ratio set to 3.6")
     except:
         print("Unable to set balance ratio")
             
@@ -333,99 +333,119 @@ def get_mallet(ser):
     
     return pos, vel, acc, True
 
-def object_loc(cam):
+def object_loc(cam, load):
     """Optimized timing measurement with minimal overhead"""
     
     # Disable garbage collection during measurement
 
     try:
-        set_pixel_format(cam, mode="Mono8")
-        configure_camera(cam, gain_val=10.0, exposure_val=6000.0)
-        set_frame_rate(cam, target_fps=20.0)
-        
-        cam.BeginAcquisition()
-        
-        # Warm up - discard first few frames
         img_shape = (1536, 1296)
+        if not load:
+            set_pixel_format(cam, mode="Mono8")
+            configure_camera(cam, gain_val=10.0, exposure_val=6000.0)
+            set_frame_rate(cam, target_fps=20.0)
+            
+            cam.BeginAcquisition()
+            
+            # Warm up - discard first few fra
 
-        image = cam.GetNextImage()
-        img = image.GetData().reshape(img_shape)
-        image.Release()
-        
-        #while True:
-        #    cv2.imshow("arucos", img)
-        #    cv2.waitKey(1)
-        #    image = cam.GetNextImage()
-        #    img = image.GetData().reshape(img_shape)
-        #    image.Release()
-        
-        setup = tracker.SetupCamera()
-        while not setup.run_extrinsics(img):
-            cv2.imshow("arucos", img[::2, ::2])
-            cv2.waitKey(0)
             image = cam.GetNextImage()
             img = image.GetData().reshape(img_shape)
             image.Release()
             
-        cv2.destroyAllWindows()
-        
-        cam.EndAcquisition()
-                                      
-        set_pixel_format(cam, mode="BayerRG8")
-        configure_camera(cam, gain_val=35.0, exposure_val=100.0)
-        set_frame_rate(cam, target_fps=120.0)
-        
-        print("Remove mallet + puck from view")
-        input()
-        
-        cam.BeginAcquisition()
-        
-        image = cam.GetNextImage()
-        img = image.GetData().reshape(img_shape)
-        image.Release()
-        
-        y_max = np.max(img[:, int(img.shape[1]/2-30):int(img.shape[1]/2+30)], axis=1)
-        cutoff = np.array([np.max(y_max[max(0,i-30):min(i+30, len(y_max))]) for i in range(len(y_max))])
-        
-        #cutoff_thres = np.minimum(np.tile(cutoff[:,None], (1,1296)), 225) + 25
-        #cv2.imshow("thresh", cutoff_thres[::2, ::2])
-        #cv2.imshow("img", img[::2, ::2])
-        #cv2.waitKey(0)
-        print("Move mallet up or down")
-        input()
-        
-        del y_max
-        
-        for _ in range(10):
+            #while True:
+            #    cv2.imshow("arucos", img)
+            #    cv2.waitKey(1)
+            #    image = cam.GetNextImage()
+            #    img = image.GetData().reshape(img_shape)
+            #    image.Release()
+            
+            setup = tracker.SetupCamera()
+            while not setup.run_extrinsics(img):
+                cv2.imshow("arucos", img[::2, ::2])
+                cv2.waitKey(0)
+                image = cam.GetNextImage()
+                img = image.GetData().reshape(img_shape)
+                image.Release()
+                
+            cv2.destroyAllWindows()
+            
+            cam.EndAcquisition()
+                                          
+            set_pixel_format(cam, mode="BayerRG8")
+            configure_camera(cam, gain_val=35.0, exposure_val=100.0)
+            set_frame_rate(cam, target_fps=120.0)
+            
+            print("Remove mallet + puck from view")
+            input()
+            
+            cam.BeginAcquisition()
+            
             image = cam.GetNextImage()
             img = image.GetData().reshape(img_shape)
             image.Release()
-        
-        y_max2 = np.max(img[:, int(img.shape[1]/2-30):int(img.shape[1]/2+30)], axis=1)
-        cutoff2 = np.array([np.max(y_max2[max(0,i-30):min(i+30, len(y_max2))]) for i in range(len(y_max2))])
-        
-        #cutoff_thres = np.minimum(np.tile(cutoff2[:,None], (1,1296)), 225) + 25
-        #cv2.imshow("thresh", cutoff_thres[::2, ::2])
-        #cv2.imshow("img", img[::2, ::2])
-        #cv2.waitKey(0)
-        
-        cutoff = np.maximum(cutoff, cutoff2)
-        #cutoff_thres = np.minimum(np.tile(cutoff[:,None], (1,1296)), 225) + 25
-        #cv2.imshow("thresh", cutoff_thres[::2, ::2])
-        #cv2.waitKey(0)
-        
-        del y_max2
-        del cutoff2
-        
-                
-        track = tracker.CameraTracker(setup.rotation_matrix,
-                                      setup.translation_vector,
-                                      setup.z_pixel_map,
-                                      68.35*10**(-3), #70.44*10**(-3)) #(120.94)*10**(-3))
-                                      cutoff)
+            
+            y_max = np.max(img[:, int(img.shape[1]/2-30):int(img.shape[1]/2+30)], axis=1)
+            cutoff = np.array([np.max(y_max[max(0,i-30):min(i+30, len(y_max))]) for i in range(len(y_max))])
+            
+            #cutoff_thres = np.minimum(np.tile(cutoff[:,None], (1,1296)), 225) + 25
+            #cv2.imshow("thresh", cutoff_thres[::2, ::2])
+            #cv2.imshow("img", img[::2, ::2])
+            #cv2.waitKey(0)
+            print("Move mallet up or down")
+            input()
+            
+            del y_max
+            
+            for _ in range(10):
+                image = cam.GetNextImage()
+                img = image.GetData().reshape(img_shape)
+                image.Release()
+            
+            y_max2 = np.max(img[:, int(img.shape[1]/2-30):int(img.shape[1]/2+30)], axis=1)
+            cutoff2 = np.array([np.max(y_max2[max(0,i-30):min(i+30, len(y_max2))]) for i in range(len(y_max2))])
+            
+            #cutoff_thres = np.minimum(np.tile(cutoff2[:,None], (1,1296)), 225) + 25
+            #cv2.imshow("thresh", cutoff_thres[::2, ::2])
+            #cv2.imshow("img", img[::2, ::2])
+            #cv2.waitKey(0)
+            
+            cutoff = np.maximum(cutoff, cutoff2)
+            #cutoff_thres = np.minimum(np.tile(cutoff[:,None], (1,1296)), 225) + 25
+            #cv2.imshow("thresh", cutoff_thres[::2, ::2])
+            #cv2.waitKey(0)
+            
+            del y_max2
+            del cutoff2
+            
+                    
+            track = tracker.CameraTracker(setup.rotation_matrix,
+                                          setup.translation_vector,
+                                          setup.z_pixel_map,
+                                          68.35*10**(-3), #70.44*10**(-3)) #(120.94)*10**(-3))
+                                          cutoff)
+                                          
+            np.savez("setup_data.npz",
+                rotation_matrix=setup.rotation_matrix,
+                translation_vector=setup.translation_vector,
+                z_pixel_map=setup.z_pixel_map,
+                cutoff=cutoff)
+                                          
+            del setup
+            del cutoff
+        else:
+            setup_data = np.load("setup_data.npz")
+            track = tracker.CameraTracker(setup_data["rotation_matrix"],
+                                      setup_data["translation_vector"],
+                                      setup_data["z_pixel_map"],
+                                      68.35*10**(-3),
+                                      setup_data["cutoff"])
                                       
-        del setup
-        del cutoff
+            set_pixel_format(cam, mode="BayerRG8")
+            configure_camera(cam, gain_val=35.0, exposure_val=100.0)
+            set_frame_rate(cam, target_fps=120.0)
+
+            cam.BeginAcquisition()
         
         gc.collect()
         
@@ -460,6 +480,10 @@ def main():
         print("Warning: Not running as root. Real-time performance may be limited.")
         print("Run with: sudo python3 script.py")
         return
+        
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--load", type=str2bool, default=False)
+    args = parser.parse_args()
     
     system = PySpin.System.GetInstance()
     
@@ -484,7 +508,7 @@ def main():
         configure_buffer_handling(cam)
         set_roi(cam,1296,1536,376,0)
 
-        object_loc(cam)
+        object_loc(cam, args.load)
 
     except Exception as ex: #PySpin.SpinnakerException as ex:
         print("Error: %s" % ex)

@@ -40,8 +40,8 @@ class SetupCamera:
         self.rotation_matrix = cv2.Rodrigues(np.array([-2.4881045, -2.43093864, 0.81342852]))[0]
         self.translation_vector = np.array([-0.54740303, -1.08125622,  2.45483598])
 
-        self.puck_z = 3.6* 10**(-3)
-        self.puck_r = 0.5 * 0.0629
+        self.puck_z = 3.75 * 10**(-3) #3.6* 10**(-3)
+        self.puck_r = 0.5 * 0.0636 #0.5 * 0.0629
         self.table_width = 0.992
         self.table_height = 1.993 
 
@@ -139,8 +139,8 @@ class CameraTracker:
         self.translation_vector = translation_vector
         self.z_pixel_map = z_pixel_map
 
-        self.puck_z = 3.6* 10**(-3)
-        self.puck_r = 0.5 * 0.0629
+        self.puck_z = 3.75 * 10**(-3) #3.6* 10**(-3)
+        self.puck_r = 0.5 * 0.0636 #0.5 * 0.0629
 
         self.op_mallet_z = op_mallet_z
         self.op_mallet_r = 0.5 * 0.0997 # Guess here, measure later
@@ -171,7 +171,7 @@ class CameraTracker:
         contours = [
             cnt for cnt in contours
             if len(cnt) >= 35
-            and cv2.contourArea(cnt) >= 100
+            and cv2.contourArea(cnt) >= 60
         ]
         
         if len(contours) == 0:
@@ -308,6 +308,30 @@ class CameraTracker:
         
         sorted_indices = np.argsort(scores)
         #print(score_points[sorted_indices[-1]])
+        
+        if scores[sorted_indices[-1]] - scores[sorted_indices[-2]] < 3:
+            idxs = None
+            for i in range(len(sorted_indices)):
+                if scores[sorted_indices[i]] > scores[sorted_indices[-1]] - 3:
+                    idxs = range(i,len(sorted_indices))
+                    break
+        
+            dist_check = False
+            for i in idxs:
+                if np.linalg.norm(score_points[sorted_indices[-1]] - score_points[sorted_indices[i]]) > 0.01:
+                    dist_check = True
+                    break
+            if not dist_check:
+                return score_points[sorted_indices[-1]]
+            
+            guess_pos = 2*self.past_puck_pos - self.past_past_puck_pos
+            dist_scores = [np.linalg.norm(score_points[sorted_indices[i]] - guess_pos) for i in idxs]
+            min_dist = np.argmin(dist_scores)
+            #print("A")
+            #print(idxs)
+            #print(dist_scores)
+            #print(score_points[sorted_indices[idxs[min_dist]]])
+            return score_points[sorted_indices[idxs[min_dist]]]
 
         return score_points[sorted_indices[-1]]
     

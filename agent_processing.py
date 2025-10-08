@@ -85,13 +85,13 @@ del checkpoint
 #policy_module.load_state_dict(torch.load("model_183.pth"), map_location=torch.device("cpu")) #8
 #policy_module.eval()
 
-pullyR = 0.035686666463209935
-a1 = 3.579*10**(-6)
-a2 = 0.00571
-a3 = (0.0596+0.0467)/2
-b1 = -1.7165*10**(-6)
-b2 = -0.002739
-b3 = 0
+pullyR = 0.035755
+a1 = 7.474*10**(-6) #3.579*10**(-6)
+a2 = 6.721*10**(-3) #0.00571
+a3 = 6.658*10**(-2) #(0.0596+0.0467)/2
+b1 = -1.607*10**(-6) #-1.7165*10**(-6)
+b2 = -2.731*10**(-3) #-0.002739
+b3 = 3.610*10**(-3) #0
 
 C1 = [Vmax * pullyR / 2, Vmax * pullyR / 2]
 C5 = [a1-b1, a1+b1]
@@ -223,8 +223,8 @@ def solve_vt1(x_f):
     return [ax, ay]
 
 def solve_C1p(x, k):
-    if x <= 0:
-        return 1 - x
+    if x[0] <= 0:
+        return 1 - x[0]
     return C2[k]/C7[k] - (x[0]/(ab[k][1]*C7[k])*\
                 math.log((x[0]*CE[k][3])/(-x[0]*CE[k][1]+C2[k]*A2CE[k][1]+C3[k]*A3CE[k][1]+C4[k]*A4CE[k][1]))) - mallet_bounds[k][1]
 
@@ -248,40 +248,47 @@ def update_path(x_0, x_p, x_pp, x_f, Vo):
 
     for j in range(2):
         if x_p[j] > 0 and C2[j]/C7[j] > mallet_bounds[j][1]:
-            val, info, ier, msg = fsolve(solve_C1p, x0=0.05, xtol=1e-4, full_output=True, args=(j))
-            if ier != 1:
-                for n in range(1,11):
-                    val, info, ier, msg = fsolve(solve_C1p, x0=0.05/(n*10), xtol=1e-4, full_output=True, args=(j))
-                    if ier == 1:
-                        break
-
+            if x_0[j] > mallet_bounds[j][1] or solve_C1p([Vmax*pullyR], j) > 0:
+                Vmin[j] = 2*Vmax
+                C1[j] = Vmin[j] * pullyR/2
+            else:
+                val, info, ier, msg = fsolve(solve_C1p, x0=0.05, xtol=1e-4, full_output=True, args=(j))
                 if ier != 1:
-                    print("C1p failed corvergence")
+                    val, info, ier, msg = fsolve(solve_C1p, x0=0.005, xtol=1e-4, full_output=True, args=(j))
+                    if ier != 1:
+                        Vmin[j] = 0.2
+                        C1[j] = Vmin[j] * pullyR/2
+                        print("C1p failed corvergence")
 
-            C1[j] = val[0]
-            Vmin[j] = C1[j] * 2/pullyR
+                C1[j] = val[0]
+                Vmin[j] = C1[j] * 2/pullyR
 
             #solve C1 > 0 so that x_over[j] = bounds[1]
         elif x_p[j] < 0 and C2[j]/C7[j] < mallet_bounds[j][0]:
-            val, info, ier, msg = fsolve(solve_C1n, x0=-0.05, xtol=1e-4, full_output=True, args=(j))
-            if ier != 1:
-                for n in range(1,11):
-                    val, info, ier, msg = fsolve(solve_C1n, x0=-0.05/(n*10), xtol=1e-4, full_output=True, args=(j))
-                    if ier == 1:
-                        break
-
+            if x_0[j] < mallet_bounds[j][0] or solve_C1n([-Vmax*pullyR], j) < 0:
+                Vmin[j] = 2*Vmax
+                C1[j] = -Vmin[j] * pullyR/2
+            else:
+                val, info, ier, msg = fsolve(solve_C1n, x0=-0.05, xtol=1e-4, full_output=True, args=(j))
                 if ier != 1:
-                    print("C1n failed corvergence")
+                    val, info, ier, msg = fsolve(solve_C1n, x0=-0.05/(10), xtol=1e-4, full_output=True, args=(j))
 
-            C1[j] = val[0]
+                    if ier != 1:
+                        Vmin[j] = 0.2
+                        C1[j] = -Vmin[j] * pullyR/2
+                        print("C1n failed corvergence")
 
-            Vmin[j] = abs(C1[j]) * 2/pullyR
+                C1[j] = val[0]
+
+                Vmin[j] = abs(C1[j]) * 2/pullyR
         # set magntiude of C1
         
     Vf = [0,0]
 
     Vmin[0] = max(Vmin[0], 0.01)
     Vmin[1] = max(Vmin[1], 0.01)
+    Vmin[1] = min(Vmin[1], 2*Vmax)
+    Vmin[0] = min(Vmin[0], 2*Vmax)
     if Vmin[0] + Vmin[1] > 2*Vmax:
         sum = Vmin[0] + Vmin[1] + 0.0001
         Vmin[0] *= 2*Vmax/sum
@@ -367,19 +374,26 @@ def update_path(x_0, x_p, x_pp, x_f, Vo):
             except ValueError:
                 pass
 
-    
-
     vt_1 = solve_vt1(x_f)
     vt_2 = [int((2*vt_1[0] - x_f[0]*C7[0]/C1[0]+C2[0]/C1[0])*10000), int((2*vt_1[1]-x_f[1]*C7[1]/C1[1]+C2[1]/C1[1])*10000)]
+    
     vt_1 = [int((vt_1[0][0]) * 10000), int((vt_1[1][0])*10000)]
 
     Vf  = [int(2*C1[0]/pullyR*10000), int(2*C1[1]/pullyR*10000)]
-
+    
+    #print("data")
+    #print(x_0)
+    #print(x_p)
+    #print(x_pp)
+    #print(np.array(vt_1)/10000.0)
+    #print(np.array(vt_2)/10000.0)
+    #print(np.array(Vf)/10000.0)
+    
     C2 = [int(val*100000000) for val in C2]
     C3 = [int(val*100000000) for val in C3]
     C4 = [int(val*100000000) for val in C4]
 
-    sum = vt_1[0] + vt_1[1] + vt_2[0] + vt_2[1] + Vf[0] + Vf[1] + C2[0] + C2[1] + C3[0] + C3[1] + C4[0] + C4[1]
+    checksum = vt_1[0] ^ vt_1[1] ^ vt_2[0] ^ vt_2[1] ^ Vf[0] ^ Vf[1] ^ C2[0] ^ C2[1] ^ C3[0] ^ C3[1] ^ C4[0] ^ C4[1]
     
     data = struct.pack('<iiiiiiiiiiiii',\
                        np.int32(vt_1[0]), np.int32(vt_1[1]),\
@@ -388,7 +402,7 @@ def update_path(x_0, x_p, x_pp, x_f, Vo):
                        np.int32(C2[0]), np.int32(C2[1]),\
                        np.int32(C3[0]), np.int32(C3[1]),\
                        np.int32(C4[0]), np.int32(C4[1]),\
-                       np.int32(sum))
+                       np.int32(checksum))
     
     return data
 

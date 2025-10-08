@@ -37,7 +37,39 @@ margin_bottom = 0.03
 mallet_r = 0.1011 / 2
 puck_r = 0.0629 / 2
 
+num_points = 11
+
 Vmax = 24 * 0.8
+
+class CircularMalletBuffer:
+    def __init__(self, length: int):
+        """
+        Initialize a circular buffer for storing 3-float entries.
+        
+        Args:
+            length (int): Maximum number of entries in the buffer.
+        """
+        self.length = length
+        self.buffer = np.zeros((length, 3))
+        self.index = 0
+
+    def add(self, entry):
+        """Add one entry (3 floats) to the buffer."""
+        self.buffer[self.index] = entry
+        self.index = (self.index + 1) % self.length
+
+    def read(self) -> np.ndarray:
+        """
+        Return all buffer contents in chronological order.
+        
+        Returns:
+            np.ndarray: Array of shape (N, 3), where N ≤ length.
+        """
+        return np.vstack((self.buffer[self.index:], self.buffer[:self.index]))
+            
+mallet_buffer = CircularMalletBuffer(11)
+stored_buffer = bytearray()
+
 def set_realtime_priority():
     os.sched_setaffinity(0, {2,3})
     SCHED_FIFO = 1
@@ -181,8 +213,8 @@ def configure_camera(cam, gain_val=30.0, exposure_val=100.0):
     try:
         balance_ratio = PySpin.CFloatPtr(nodemap.GetNode("BalanceRatio"))
         if PySpin.IsAvailable(balance_ratio) and PySpin.IsWritable(balance_ratio):
-            balance_ratio.SetValue(3.3)
-            print("balance ratio set to 3.3")
+            balance_ratio.SetValue(3.6)
+            print("balance ratio set to 3.6")
     except:
         print("Unable to set balance ratio")
             
@@ -283,62 +315,91 @@ def deq(q, xmin, xmax):
     return (y+1)/2 * (xmax - xmin) + xmin
         
 
-def get_mallet(ser):    
-    FMT = '<hhhhhhB'    # 6×int16, 1×uint8
-    FRAME_SIZE = struct.calcsize(FMT)
+def get_mallet(ser):   
+    global stored_buffer
+    global mallet_buffer 
+    FMT = '<hhhB'    # 3×int16, 1×uint8
+    FRAME_SIZE = struct.calcsize(FMT) #11
     
     # Read entire buffer
-    while ser.in_waiting < 33:
+    while ser.in_waiting < 11*2-1:
         pass
+
     buffer = ser.read(ser.in_waiting)
     
-    # Start from the last 29 bytes
-    search_buffer = buffer[-33:]
+    if len(buffer) > (num_points+1) * 11 - 1:
+        stored_buffer = bytearray(buffer[-((num_points+1)*11-1):])
+    else:
+        stored_buffer.extend(buffer)
     
-    # Find the start marker (0xAA)
-    start_idx = -1
-    for i in range(len(search_buffer)-3):
-        if search_buffer[i] == 0xFF and search_buffer[i+1] == 0xFF and search_buffer[i+2] == 0xFF:
-            start_idx = i+2
+    while len(stored_buffer) >= 11:
+        # Find the start marker (0xAA)
+        start_idx = -1
+        for i in range(len(stored_buffer)-3):
+            if stored_buffer[i] == 0xFF and stored_buffer[i+1] == 0xFF and stored_buffer[i+2] == 0xFF:
+                start_idx = i+2
+                break
+        
+        if start_idx == -1:
             break
-    
-    if start_idx == -1:
-        print("No start marker found")
-        return None, None, None, False
-    
-    # Check if we have enough bytes for a complete frame after the start marker
-    remaining_bytes = len(search_buffer) - start_idx - 1  # -1 for the start marker itself
-    if remaining_bytes < FRAME_SIZE + 1:  # +1 for end marker
-        print("Not enough bytes for complete frame")
-        return None, None, None, False
-    
-    # Extract the frame data
-    frame_start = start_idx + 1
-    frame_end = frame_start + FRAME_SIZE
-    raw = search_buffer[frame_start:frame_end]
-    
-    # Check end marker
-    if frame_end >= len(search_buffer) or search_buffer[frame_end] != 0x55:
-        print(buffer)
-        print("Invalid end marker")
-        return None, None, None, False
-    
-    # Unpack the data
-    p0, p1, v0, v1, a0, a1, chk = struct.unpack(FMT, raw)
+        
+        # Check if we have enough bytes for a complete frame after the start marker
+        remaining_bytes = len(stored_buffer) - start_idx - 1  # -1 for the start marker itself
+        if remaining_bytes < FRAME_SIZE + 1:  # +1 for end marker
+            break
+        
+        # Extract the frame data
+        frame_start = start_idx + 1
+        frame_end = frame_start + FRAME_SIZE
+        raw = stored_buffer[frame_start:frame_end]
+        
+        # Check end marker
+        if stored_buffer[frame_end] != 0x55:
+            print("frame end err")
+            print(stored_buffer)
+            print(1/0)
+            break
+        
+        # Unpack the data
+        p0, p1, dt1, chk = struct.unpack(FMT, raw)
 
-    # Verify checksum
-    c = 0
-    for b in raw[:-1]:
-        c ^= b
-    if c != chk:
-        print("bad checksum", c, chk)
-        return None, None, None, False
+        # Verify checksum
+        c = 0
+        for b in raw[:-1]:
+            c ^= b
+        if c != chk:
+            print("bad checksum", c, chk)
+            print(stored_buffer)
+            print(1/0)
+        else:
+            entry = np.array([deq(p0, -1, 2), deq(p1, -1, 2), deq(dt1, 0, 3) / 1000.0])
+            mallet_buffer.add(entry)
+        
+        if frame_end+1 < len(stored_buffer):
+            del stored_buffer[:frame_end+1]
+        else:
+            break
+            
+def get_init_conditions(pred=0):
+    global mallet_buffer
+    mallet_data = mallet_buffer.read()
+    ts = np.cumsum(mallet_data[:,2])
+    coef_x = np.polyfit(ts, mallet_data[:,0], 2)
+    coef_y = np.polyfit(ts, mallet_data[:,1], 2)
     
-    pos = np.array([deq(p0, -1, 2), deq(p1, -1, 2)])
-    vel = np.array([deq(v0, -30, 30), deq(v1, -30, 30)])
-    acc = np.array([deq(a0, -150, 150), deq(a1, -150, 150)])
+    t = ts[-1] + pred
     
-    return pos, vel, acc, True
+    pos = np.array([coef_x[0]*t**2 + coef_x[1]*t + coef_x[2], \
+                    coef_y[0]*t**2 + coef_y[1]*t + coef_y[2]])
+                    
+    vel = np.array([2*coef_x[0]*t + coef_x[1], \
+                    2*coef_y[0]*t + coef_y[1]])
+                    
+    acc = np.array([2*coef_x[0], \
+                    2*coef_y[0]])
+                    
+    return pos, vel, acc
+    
 
 def system_loop(cam, load, pro):
     """Optimized timing measurement with minimal overhead"""
@@ -348,236 +409,269 @@ def system_loop(cam, load, pro):
     opponent_mallet_z = 68.35*10**(-3)
     if not pro:
         opponent_mallet_z = 120.94*10**(-3)
-    try:
-    
-        PORT = '/dev/ttyUSB0'  # Adjust this to COM port or /dev/ttyUSBx
-        BAUD = 460800
 
-        # === CONNECT ===
-        ser = serial.Serial(PORT, BAUD, timeout=0)
-        if not load:
-            time.sleep(1)
-            
-            set_pixel_format(cam, mode="Mono8")
-            configure_camera(cam, gain_val=10.0, exposure_val=6000.0)
-            set_frame_rate(cam, target_fps=20.0)
-            
-            cam.BeginAcquisition()
+    PORT = '/dev/ttyUSB0'  # Adjust this to COM port or /dev/ttyUSBx
+    BAUD = 460800
 
-            image = cam.GetNextImage()
-            img = image.GetData().reshape(img_shape)
-            image.Release()
-            
-            setup = tracker.SetupCamera()
-            while not setup.run_extrinsics(img):
-                cv2.imshow("arucos", img[::2, ::2])
-                cv2.waitKey(0)
-                image = cam.GetNextImage()
-                img = image.GetData().reshape(img_shape)
-                image.Release()
-                
-            cv2.destroyAllWindows()
-            
-            cam.EndAcquisition()
-            
-        set_pixel_format(cam, mode="BayerRG8")
-        configure_camera(cam, gain_val=35.0, exposure_val=100.0)
-        set_frame_rate(cam, target_fps=120.0)
+    # === CONNECT ===
+    ser = serial.Serial(PORT, BAUD, timeout=0)
+    if not load:
+        time.sleep(1)
         
-        ser.write(b'\n')
-        while ser.in_waiting == 0:
-            continue
-        ser.read(ser.in_waiting)
-
-        ser.write(b'\n')
-        input("Place mallet bottom right")
-        
-        ser.write(b'\n')
-        
-        while ser.in_waiting == 0:
-            continue
-        ser.read(ser.in_waiting)
-        
-        input("Remove calibration device")
-        
-        ser.write(b'\n')
-        
-        while ser.in_waiting == 0:
-            continue
-        ser.read(ser.in_waiting)
-        
-        input("Turn on Power to Motors")
-
-        ser.write(b'\n')
-        
-        while ser.in_waiting == 0:
-            continue
-        ser.read(ser.in_waiting)
-
-        
-        input("Enter to Start")
-        
-        gc.collect()
+        set_pixel_format(cam, mode="Mono8")
+        configure_camera(cam, gain_val=10.0, exposure_val=6000.0)
+        set_frame_rate(cam, target_fps=20.0)
         
         cam.BeginAcquisition()
-        track = None
-        if not load:
-            xf = np.array([0.7, 0.2])
-            Vo = np.array([5, 5])
-            
-            passed = False
-            while not passed:
-                pos, vel, acc, passed = get_mallet(ser)
 
-            data = ap.update_path(pos, vel, acc, xf, Vo)
-
-            ser.write(b'\n' + data + b'\n')
-
-            time.sleep(1)
-            
-            image = cam.GetNextImage()
-            img = image.GetData().reshape(img_shape)
-            image.Release()
-            
-            y_max = np.max(img[:, int(img.shape[1]/2-30):int(img.shape[1]/2+30)], axis=1)
-            cutoff = np.array([np.max(y_max[max(0,i-30):min(i+30, len(y_max))]) for i in range(len(y_max))])
-            
-            xf = np.array([0.2, 0.2])
-            Vo = np.array([5, 5])
-            
-            passed = False
-            while not passed:
-                pos, vel, acc, passed = get_mallet(ser)
-
-            data = ap.update_path(pos, vel, acc, xf, Vo)
-
-            ser.write(b'\n' + data + b'\n')
-            
-            time.sleep(1)
-            
-            image = cam.GetNextImage()
-            img = image.GetData().reshape(img_shape)
-            image.Release()
-            
-            y_max = np.max(img[:, int(img.shape[1]/2-30):int(img.shape[1]/2+30)], axis=1)
-            cutoff = np.maximum(cutoff, np.array([np.max(y_max[max(0,i-30):min(i+30, len(y_max))]) for i in range(len(y_max))]))
-            
-            del y_max
+        image = cam.GetNextImage()
+        img = image.GetData().reshape(img_shape)
+        image.Release()
         
-            track = tracker.CameraTracker(setup.rotation_matrix,
-                                          setup.translation_vector,
-                                          setup.z_pixel_map,
-                                          68.35*10**(-3),
-                                          cutoff)
-                                      
-            np.savez("setup_data.npz",
-                    rotation_matrix=setup.rotation_matrix,
-                    translation_vector=setup.translation_vector,
-                    z_pixel_map=setup.z_pixel_map,
-                    cutoff=cutoff)
-                                      
-            del setup
-        else:
-            setup_data = np.load("setup_data.npz")
-            track = tracker.CameraTracker(setup_data["rotation_matrix"],
-                                          setup_data["translation_vector"],
-                                          setup_data["z_pixel_map"],
-                                          opponent_mallet_z,
-                                          setup_data["cutoff"])
-
-        gc.collect()
-        
-        for _ in range(20):
+        setup = tracker.SetupCamera()
+        while not setup.run_extrinsics(img):
+            cv2.imshow("arucos", img[::2, ::2])
+            cv2.waitKey(0)
             image = cam.GetNextImage()
             img = image.GetData().reshape(img_shape)
-            track.process_frame(img)
             image.Release()
             
-        dt = 4.0768/1000
-        #top = False
-        #timer = time.perf_counter()
-        while True:
-        
-            image = cam.GetNextImage()
-            img = image.GetData().reshape(img_shape)
-            track.process_frame(img)
-            image.Release()
-            
-            passed = False
-            while not passed:
-                pos, vel, acc, passed = get_mallet(ser)
-                
-            obs[:20] = track.past_data.get()
-            obs[24:26] = obs[20:22] #update past mallet
-            obs[26:28] = obs[22:24]
-            obs[20:22] = pos #add current mallet pos
-            obs[22:24] = vel
-            
-            tensor_obs = TensorDict({"observation": torch.tensor(obs, dtype=torch.float32)})
-            #print("--")
-            #print(obs)
-                           
-            with torch.no_grad():
-            	policy_out = ap.policy_module(tensor_obs)
-
-            action = policy_out["action"].detach().numpy()
-            obs[28:32] = action
-            #print(action)
-            no_update = (np.linalg.norm(obs[20:22] - obs[24:26]) < 0.01) and (np.linalg.norm(obs[28:30] - action[:2]) < 0.01) and (np.linalg.norm(action[:2] - obs[20:22]) < 0.01)
-            
-            if not no_update:
-                #print('--')
-                #print(obs)
-                #print(action)
-                xf = action[:2]
-
-                xf[0] = np.maximum(margin_bottom+mallet_r, xf[0])
-                xf[0] = np.minimum(table_bounds[0]/2-mallet_r, xf[0])
-
-                xf[1] = np.maximum(margin+mallet_r, xf[1])
-                xf[1] = np.minimum(table_bounds[1]-margin-mallet_r, xf[1])
-                
-                #if time.perf_counter() - timer > 4:
-                #    top = not top
-                #    timer = time.perf_counter()
-                
-                #if top:
-                #    xf[0] = table_bounds[0]/2 - 0.25
-                #    xf[1] = table_bounds[1]/2
-                #else:
-                #    xf[0] = 0.25
-                #    xf[1] = table_bounds[1]/2
-                
-
-                Vo = action[2] * Vmax * np.array([1+action[3],1-action[3]])
-                #Vo[0] = np.minimum(Vo[0], 15)
-                #Vo[1] = np.minimum(Vo[1], 15)
-                #print("A")
-                #print(xf)
-                #print(Vo)
-                
-                #Vo[0] = 7
-                #Vo[1] = 7
-                #obs[28:32] = np.concatenate([xf, Vo], axis=0)
-                passed = False
-                while not passed:
-                    pos, vel, acc, passed = get_mallet(ser)
-
-                new_pos = pos + vel * dt + 0.5 * acc * dt**2
-                new_vel = vel + acc * dt
-                data = ap.update_path(new_pos, new_vel, acc, xf, Vo)
-
-                ser.write(b'\n' + data + b'\n')
-            
-            image = cam.GetNextImage()
-            img = image.GetData().reshape(img_shape)
-            track.process_frame(img)
-            image.Release()
+        cv2.destroyAllWindows()
         
         cam.EndAcquisition()
-    except Exception as e:
-        print("err")
-        print(e)
+        
+    set_pixel_format(cam, mode="BayerRG8")
+    configure_camera(cam, gain_val=35.0, exposure_val=100.0)
+    set_frame_rate(cam, target_fps=120.0)
+    
+    ser.write(b'\n')
+    while ser.in_waiting == 0:
+        continue
+    ser.reset_input_buffer()
+
+    ser.write(b'\n')
+    input("Place mallet bottom right")
+    
+    ser.write(b'\n')
+    
+    while ser.in_waiting == 0:
+        continue
+    ser.reset_input_buffer()
+    
+    input("Place mallet bottom left")
+    
+    ser.write(b'\n')
+    
+    while ser.in_waiting == 0:
+        continue
+        
+    time.sleep(0.1)
+        
+    pully_R = float(ser.readline().decode('utf-8').strip())
+    print(f"Pulley radius measured as: {pully_R}")
+    ap.pullyR = pully_R
+    ap.C1 = [ap.Vmax * ap.pullyR / 2, ap.Vmax * ap.pullyR / 2]
+    
+    obs[32+14:] = np.array([ap.a1/ap.pullyR * 1e4, ap.a2/ap.pullyR * 1e1, ap.a3/ap.pullyR * 1e0, ap.b1/ap.pullyR * 1e4, ap.b2/ap.pullyR * 1e1])
+    
+    ser.reset_input_buffer()
+    
+    input("Remove calibration device")
+    
+    ser.write(b'\n')
+    
+    while ser.in_waiting == 0:
+        continue
+    ser.reset_input_buffer()
+    
+    input("Turn on Power to Motors")
+
+    ser.write(b'\n')
+    
+    while ser.in_waiting == 0:
+        continue
+    ser.reset_input_buffer()
+
+    
+    input("Enter to Start")
+    time.sleep(2.0)
+    
+    gc.collect()
+    
+    cam.BeginAcquisition()
+    track = None
+    
+    ser.reset_input_buffer()
+    
+    while ser.in_waiting < (num_points+1) * 11:
+        pass
+    
+    for _ in range(11):
+        get_mallet(ser)
+    
+    if not load:
+        xf = np.array([0.7, 0.2])
+        Vo = np.array([5, 5])
+        
+        get_mallet(ser)
+        pos, vel, acc = get_init_conditions()
+
+        data = ap.update_path(pos, vel, acc, xf, Vo)
+
+        ser.write(b'\n' + data + b'\n')
+
+        time.sleep(1)
+        
+        image = cam.GetNextImage()
+        img = image.GetData().reshape(img_shape)
+        image.Release()
+        
+        y_max = np.max(img[:, int(img.shape[1]/2-30):int(img.shape[1]/2+30)], axis=1)
+        cutoff = np.array([np.max(y_max[max(0,i-30):min(i+30, len(y_max))]) for i in range(len(y_max))])
+        
+        xf = np.array([0.2, 0.2])
+        Vo = np.array([5, 5])
+        
+        ser.reset_input_buffer()
+        
+        while ser.in_waiting < (num_points+1) * 11:
+            pass
+        
+        for _ in range(11):
+            get_mallet(ser)
+        
+        pos, vel, acc = get_init_conditions()
+
+        data = ap.update_path(pos, vel, acc, xf, Vo)
+
+        ser.write(b'\n' + data + b'\n')
+        
+        time.sleep(1)
+        
+        image = cam.GetNextImage()
+        img = image.GetData().reshape(img_shape)
+        image.Release()
+        
+        y_max = np.max(img[:, int(img.shape[1]/2-30):int(img.shape[1]/2+30)], axis=1)
+        cutoff = np.maximum(cutoff, np.array([np.max(y_max[max(0,i-30):min(i+30, len(y_max))]) for i in range(len(y_max))]))
+        
+        del y_max
+    
+        track = tracker.CameraTracker(setup.rotation_matrix,
+                                      setup.translation_vector,
+                                      setup.z_pixel_map,
+                                      68.35*10**(-3),
+                                      cutoff)
+                                  
+        np.savez("setup_data.npz",
+                rotation_matrix=setup.rotation_matrix,
+                translation_vector=setup.translation_vector,
+                z_pixel_map=setup.z_pixel_map,
+                cutoff=cutoff)
+                                  
+        del setup
+    else:
+        setup_data = np.load("setup_data.npz")
+        track = tracker.CameraTracker(setup_data["rotation_matrix"],
+                                      setup_data["translation_vector"],
+                                      setup_data["z_pixel_map"],
+                                      opponent_mallet_z,
+                                      setup_data["cutoff"])
+
+    gc.collect()
+    
+    for _ in range(20):
+        image = cam.GetNextImage()
+        img = image.GetData().reshape(img_shape)
+        track.process_frame(img)
+        image.Release()
+        
+    dt = 4.0768/1000
+    ser.reset_input_buffer()
+    
+    while ser.in_waiting < (num_points+1) * 11:
+        pass
+        
+    for _ in range(11):
+        get_mallet(ser)
+    #timer = time.perf_counter()
+    while True:
+    
+        image = cam.GetNextImage()
+        img = image.GetData().reshape(img_shape)
+        track.process_frame(img)
+        image.Release()
+        
+        get_mallet(ser)
+        pos, vel, acc = get_init_conditions()
+            
+        obs[:20] = track.past_data.get()
+        obs[24:26] = obs[20:22] #update past mallet
+        obs[26:28] = obs[22:24]
+        obs[20:22] = pos #add current mallet pos
+        obs[22:24] = vel
+        
+        tensor_obs = TensorDict({"observation": torch.tensor(obs, dtype=torch.float32)})
+        #print("--")
+        #print(obs)
+                       
+        with torch.no_grad():
+        	policy_out = ap.policy_module(tensor_obs)
+
+        action = policy_out["action"].detach().numpy()
+        obs[28:32] = action
+        #print(action)
+        no_update = (np.linalg.norm(obs[20:22] - obs[24:26]) < 0.01) and (np.linalg.norm(obs[28:30] - action[:2]) < 0.01) and (np.linalg.norm(action[:2] - obs[20:22]) < 0.01)
+        
+        if not no_update:
+            #print('--')
+            #print(obs)
+            #print(action)
+            xf = action[:2]
+
+            xf[0] = np.maximum(margin_bottom+mallet_r, xf[0])
+            xf[0] = np.minimum(table_bounds[0]/2-mallet_r, xf[0])
+
+            xf[1] = np.maximum(margin+mallet_r, xf[1])
+            xf[1] = np.minimum(table_bounds[1]-margin-mallet_r, xf[1])
+            
+            #if time.perf_counter() - timer > 4:
+            #    top = not top
+            #    timer = time.perf_counter()
+            
+            #if top:
+            #    xf[0] = table_bounds[0]/2 - 0.25
+            #    xf[1] = table_bounds[1]/2
+            #else:
+            #    xf[0] = 0.25
+            #    xf[1] = table_bounds[1]/2
+            
+
+            Vo = action[2] * Vmax * np.array([1+action[3],1-action[3]])
+            #Vo[0] = np.minimum(Vo[0], 3)
+            #Vo[1] = np.minimum(Vo[1], 3)
+            #print("A")
+            #print(xf)
+            #print(Vo)
+            
+            #Vo[0] = 7
+            #Vo[1] = 7
+            #obs[28:32] = np.concatenate([xf, Vo], axis=0)
+            get_mallet(ser)
+            mallet_data = mallet_buffer.read()
+            pos, vel, acc = get_init_conditions(pred = dt)
+
+            #new_pos = pos + vel * dt + 0.5 * acc * dt**2
+            #new_vel = vel + acc * dt
+            data = ap.update_path(pos, vel, acc, xf, Vo)
+            ser.write(b'\n' + data + b'\n')
+        
+        image = cam.GetNextImage()
+        img = image.GetData().reshape(img_shape)
+        track.process_frame(img)
+        image.Release()
+    
+    cam.EndAcquisition()
 
 def str2bool(v):
     if isinstance(v, bool):
@@ -615,25 +709,15 @@ def main():
     
     # Select the first camera
     cam = cam_list.GetByIndex(0)
-    try:
-        cam.Init()
-        set_realtime_priority()
-        
-        check_isolation_status()
-        
-        configure_buffer_handling(cam)
-        set_roi(cam,1296,1536,376,0)
+    cam.Init()
+    set_realtime_priority()
+    
+    check_isolation_status()
+    
+    configure_buffer_handling(cam)
+    set_roi(cam,1296,1536,376,0)
 
-        system_loop(cam, args.load, args.pro)
-
-    except Exception as ex: #PySpin.SpinnakerException as ex:
-        print("Error: %s" % ex)
-    finally:
-        cam.EndAcquisition()
-        cam.DeInit()
-        del cam
-        cam_list.Clear()
-        system.ReleaseInstance()
+    system_loop(cam, args.load, args.pro)
 
 if __name__ == "__main__":
     main()

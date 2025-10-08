@@ -90,14 +90,13 @@ def deq(q, xmin, xmax):
     return (y+1)/2 * (xmax - xmin) + xmin
     
 def get_mallet(ser):    
-    FMT = '<hhhhhhB'    # 6×int16, 1×uint8
+    FMT = '<hhhhhB'    # 6×int16, 1×uint8
     FRAME_SIZE = struct.calcsize(FMT)
     
     # Read entire buffer
     #while ser.in_waiting < 33:
     #    pass
     search_buffer = ser.read(ser.in_waiting)
-    print(len(search_buffer))
     
     # Start from the last 29 bytes
     
@@ -129,7 +128,7 @@ def get_mallet(ser):
         return None, None, None, False
     
     # Unpack the data
-    p0, p1, v0, v1, a0, a1, chk = struct.unpack(FMT, raw)
+    p0, p1, pwm0, pwm1, dt, chk = struct.unpack(FMT, raw)
 
     # Verify checksum
     c = 0
@@ -140,13 +139,10 @@ def get_mallet(ser):
         return None, None, None, False
     
     pos = np.array([deq(p0, -0.5, 2), deq(p1, -0.5, 2)])
-    #vel = np.array([deq(v0, -30, 30), deq(v1, -30, 30)])
-    #acc = np.array([deq(a0, -150, 150), deq(a1, -150, 150)])
     vel = np.array([0,0])
     acc = np.array([0,0])
     
     return pos, vel, acc, True
-
 
 def collect_data():
     """Optimized timing measurement with minimal overhead"""
@@ -162,7 +158,7 @@ def collect_data():
     ser.write(b'\n')
     while ser.in_waiting == 0:
         continue
-    ser.read(ser.in_waiting)
+    ser.reset_input_buffer()
 
     ser.write(b'\n')
     input("Place mallet bottom right")
@@ -171,7 +167,23 @@ def collect_data():
     
     while ser.in_waiting == 0:
         continue
-    ser.read(ser.in_waiting)
+    ser.reset_input_buffer()
+    
+    input("Place mallet bottom left")
+    
+    ser.write(b'\n')
+    
+    while ser.in_waiting == 0:
+        continue
+        
+    time.sleep(0.1)
+        
+    pully_R = float(ser.readline().decode('utf-8').strip())
+    print(f"Pulley radius measured as: {pully_R}")
+    ap.pullyR = pully_R
+    ap.C1 = [ap.Vmax * ap.pullyR / 2, ap.Vmax * ap.pullyR / 2]
+    
+    ser.reset_input_buffer()
     
     input("Remove calibration device")
     
@@ -179,7 +191,7 @@ def collect_data():
     
     while ser.in_waiting == 0:
         continue
-    ser.read(ser.in_waiting)
+    ser.reset_input_buffer()
     
     input("Turn on Power to Motors")
 
@@ -187,8 +199,8 @@ def collect_data():
     
     while ser.in_waiting == 0:
         continue
-    ser.read(ser.in_waiting)
-
+    ser.reset_input_buffer()
+    
     input("Enter to Start")
     gc.collect()
     
@@ -198,25 +210,64 @@ def collect_data():
         pos, vel, acc, passed = get_mallet(ser)
             
     xf = np.array([0.7, 0.5])
-    Vo = np.array([19, 19])
+    Vo = np.array([12, 12])
     
-    data = ap.update_path(pos, np.array([0,0]), np.array([0,0]), xf, Vo)
+    data = ap.update_path(pos, vel, acc, xf, Vo)
     ser.write(b'\n' + data + b'\n')
     
     buffer = bytearray()
     
-    FMT = '<hhhhhhB'    # 6×int16, 1×uint8
+    FMT = '<hhhhhB'    # 5×int16, 1×uint8
     FRAME_SIZE = struct.calcsize(FMT)
     
-    pos = []
-    pwms = []
-    dts = []
+    sample_len = 10000
+    pos = np.zeros((sample_len,2))
+    pwms = np.zeros((sample_len,2))
+    dts = np.zeros((sample_len,))
     
     signal_end = False
     
+    t1 = time.perf_counter()
+    counter = 0
+    pos[0,:] = pully_R
+    idx = 1
+    
+    delay = np.random.random() * (0.08 - 0.02) + 0.02
+    
     while True:
-        
         # Read entire buffer
+        
+        if time.perf_counter() - t1 > delay:
+            delay = np.random.random() * (0.08 - 0.02) + 0.02
+            if idx > 21:
+                #counter += 1
+                xf = np.array([np.random.random() * (0.4) + 0.3, np.random.random() * 0.4 + 0.3])
+                #Vo = np.array([np.random.random() * 5 + 16, np.random.random() * 5 + 16])
+                Vo = np.array([12, 12])
+                
+                ts = np.cumsum(dts[idx-21:idx])
+                coef_x = np.polyfit(ts, pos[idx-21:idx,0], 2)
+                coef_y = np.polyfit(ts, pos[idx-21:idx,1], 2)
+                
+                t = ts[-1] + 0.004
+                
+                pred_pos = np.array([coef_x[0]*t**2 + coef_x[1]*t + coef_x[2], \
+                                coef_y[0]*t**2 + coef_y[1]*t + coef_y[2]])
+                                
+                pred_vel = np.array([2*coef_x[0]*t + coef_x[1], \
+                                2*coef_y[0]*t + coef_y[1]])
+                                
+                pred_acc = np.array([2*coef_x[0], \
+                                2*coef_y[0]])
+
+                data = ap.update_path(pred_pos, pred_vel, pred_acc, xf, Vo)
+                ser.write(b'\n' + data + b'\n')
+                t1 = time.perf_counter()
+        
+           
+        if ser.in_waiting > 1000:
+            print(ser.in_waiting)
+            print(1/0)
         while ser.in_waiting < 33:
             pass
         buffer.extend(ser.read(ser.in_waiting))
@@ -245,10 +296,9 @@ def collect_data():
             if frame_end >= len(buffer) or buffer[frame_end] != 0x55:
                 print("Invalid end marker")
                 break
-                
 
             # Unpack the data
-            p0, p1, v0, v1, a0, a1, chk = struct.unpack(FMT, raw)
+            p0, p1, pwm0, pwm1, dt, chk = struct.unpack(FMT, raw)
 
             # Verify checksum
             c = 0
@@ -257,16 +307,23 @@ def collect_data():
             if c != chk:
                 print("bad checksum")
 
-            pos.append(np.array([deq(p0, -0.5, 2), deq(p1, -0.5, 2)]))
-            pwms.append(np.array([deq(v0, -1.1, 1.1), deq(v1, -1.1, 1.1)]))
-            dts.append(deq(a0, 0, 2))
+            pos[idx, :] = np.array([deq(p0, -0.5, 2), deq(p1, -0.5, 2)])
+            pwms[idx, :] = np.array([deq(pwm0, -1.1, 1.1), deq(pwm1, -1.1, 1.1)])
+            dts[idx] = deq(dt, 0, 2)
     
-            if abs(deq(v0, -1.1, 1.1)) < 0.02 and abs(deq(v1, -1.1, 1.1)) < 0.02:
-                #print(abs(deq(v0, -1.1, 1.1)))
-                #print(abs(deq(v1, -1.1, 1.1)))
-                #print("B")
+            #if abs(deq(v0, -1.1, 1.1)) < 0.02 and abs(deq(v1, -1.1, 1.1)) < 0.02:
+            #    #print(abs(deq(v0, -1.1, 1.1)))
+            #    #print(abs(deq(v1, -1.1, 1.1)))
+            #    #print("B")
+            #    signal_end = True
+            #    break
+            
+            idx += 1
+            
+            if idx == sample_len:
                 signal_end = True
                 break
+            
                 
         if signal_end:
             #print("------")
@@ -283,6 +340,7 @@ def collect_data():
                 # Write rows
                 for p, pwm, dt in zip(pos, pwms, dts):
                     writer.writerow([p[0], p[1], pwm[0], pwm[1], dt])
+            print("SIGNAL END")
             break
                 
             

@@ -171,8 +171,8 @@ def configure_camera(cam, gain_val=30.0, exposure_val=100.0):
     try:
         balance_ratio = PySpin.CFloatPtr(nodemap.GetNode("BalanceRatio"))
         if PySpin.IsAvailable(balance_ratio) and PySpin.IsWritable(balance_ratio):
-            balance_ratio.SetValue(3.3)
-            print("balance ratio set to 3.3")
+            balance_ratio.SetValue(3.6)
+            print("balance ratio set to 3.6")
     except:
         print("Unable to set balance ratio")
             

@@ -30,7 +30,7 @@ green = (0, 100, 0)
 blue = (0,0,255)
 
 #fourcc = cv2.VideoWriter_fourcc(*'MJPG')
-#out = cv2.VideoWriter("161_vid.avi", fourcc, 60.0, (screen_width, screen_height))
+#out = cv2.VideoWriter("183_vid_def.avi", fourcc, 60.0, (screen_width, screen_height))
 #frame_count = 0
 
 def initalize(envs, mallet_r=0.05, puck_r=0.05, goal_w=0.35, V_max=24, pully_radius=0.035306, coll_vars=None, ab_vars=None, puck_inits=None):
@@ -71,7 +71,6 @@ def initalize(envs, mallet_r=0.05, puck_r=0.05, goal_w=0.35, V_max=24, pully_rad
     sink_bounds = np.array([[puck_r, width - puck_r], [puck_r, height-puck_r]])
     sinks = np.random.rand(game_number, 2) * (sink_bounds[:,1] - sink_bounds[:,0]) + sink_bounds[:,0]
     
-
     goal_width = goal_w
 
     Vmax = V_max
@@ -145,8 +144,8 @@ def initalize(envs, mallet_r=0.05, puck_r=0.05, goal_w=0.35, V_max=24, pully_rad
     C6[:,:,1] = ab_vars[:,:,1] + ab_vars[:,:,4] #[a2-b2, a2+b2]
 
     C7 = np.empty((game_number,2,2))
-    C7[:,:,0] = ab_vars[:,:,2]
-    C7[:,:,1] = ab_vars[:,:,2] #[a3-b3, a3+b3]
+    C7[:,:,0] = ab_vars[:,:,2] - ab_vars[:,:,5]
+    C7[:,:,1] = ab_vars[:,:,2] + ab_vars[:,:,5] #[a3-b3, a3+b3]
 
     A = np.sqrt(np.square(C6) - 4 * C5 * C7)
     B = 2 * np.square(C7) * A
@@ -306,10 +305,10 @@ def corner_collision(A, pos, vel, t, C, D, v_norm, dir, dPdt,B,f,mass, vt, res):
     tangent = np.array([n[1], -n[0]])
     vel_r = np.array(new_vel)
 
-    #res: e_i, e_r, e_f, std, normal then tangent (8,)
+    #res: n_i, n_r, n_f, t_i, t_r, t_f, n_std, t_std, wall then mallet (8,)
 
     normal_res = np.clip(res[2]+(1-res[2]/res[0])*2*res[0]/(1+np.exp(res[1]*np.square(np.dot(vel_r, n)))) + np.random.normal(0,res[6]), 0.2, 1)
-    tangent_res = np.clip(res[5]+(1-res[5]/res[3])*2*res[3]/(1+np.exp(res[4]*np.square(np.dot(vel_r, tangent)))) + np.random.normal(0,res[6]), 0.2, 1)
+    tangent_res = np.clip(res[5]+(1-res[5]/res[3])*2*res[3]/(1+np.exp(res[4]*np.square(np.dot(vel_r, tangent)))) + np.random.normal(0,res[7]), 0.2, 1)
     vel_r = np.array([-normal_res*np.dot(vel_r, n), tangent_res*np.dot(vel_r, tangent)])
     new_vel = n * vel_r[0] + tangent * vel_r[1]
 
@@ -556,7 +555,7 @@ def puck_mallet_collision(mask, pos, vel, dir, dt_col, t_init, C, D, Bm, fm, mas
             #np.clip(res[2]+(1-res[2]/res[0])*2*res[0]/(1+np.exp(res[1]*np.square(np.dot(vel_r, n)))) + np.random.normal(0,res[3]), 0.2, 1)
             res_mask = resm[collision_indices_m1]
             normal_res = np.clip(res_mask[:,2] + (1-res_mask[:,2]/res_mask[:,0])*2*res_mask[:,0]/(1+np.exp(res_mask[:,1]*np.square(np.sum(v_rel*normal, axis=-1)))) + np.random.normal(0,res_mask[:,6]), 0.2,1)
-            tangent_res = np.clip(res_mask[:,5] + (1-res_mask[:,5]/res_mask[:,3])*2*res_mask[:,3]/(1+np.exp(res_mask[:,4]*np.square(np.sum(v_rel*tangent, axis=-1)))) + np.random.normal(0,res_mask[:,6]), 0.2,1)
+            tangent_res = np.clip(res_mask[:,5] + (1-res_mask[:,5]/res_mask[:,3])*2*res_mask[:,3]/(1+np.exp(res_mask[:,4]*np.square(np.sum(v_rel*tangent, axis=-1)))) + np.random.normal(0,res_mask[:,7]), 0.2,1)
             v_rel_col = tangent * np.tile((tangent_res * np.sum(v_rel*tangent, axis=-1))[:,np.newaxis], (1,2)) -\
                   normal * np.tile((normal_res * np.sum(v_rel * normal, axis=-1))[:,np.newaxis], (1,2))
             v_p_col = v_rel_col + v_m[:,0,:][colided_mask_m1]
@@ -584,7 +583,7 @@ def puck_mallet_collision(mask, pos, vel, dir, dt_col, t_init, C, D, Bm, fm, mas
             #np.clip(res[2]+(1-res[2]/res[0])*2*res[0]/(1+np.exp(res[1]*np.square(np.dot(vel_r, n)))) + np.random.normal(0,res[3]), 0.2, 1)
             res_mask = resm[collision_indices_m2]
             normal_res = np.clip(res_mask[:,2] + (1-res_mask[:,2]/res_mask[:,0])*2*res_mask[:,0]/(1+np.exp(res_mask[:,1]*np.square(np.sum(v_rel*normal, axis=-1)))) + np.random.normal(0,res_mask[:,6]), 0.2,1)
-            tangent_res = np.clip(res_mask[:,5] + (1-res_mask[:,5]/res_mask[:,3])*2*res_mask[:,3]/(1+np.exp(res_mask[:,4]*np.square(np.sum(v_rel*tangent, axis=-1)))) + np.random.normal(0,res_mask[:,6]), 0.2,1)
+            tangent_res = np.clip(res_mask[:,5] + (1-res_mask[:,5]/res_mask[:,3])*2*res_mask[:,3]/(1+np.exp(res_mask[:,4]*np.square(np.sum(v_rel*tangent, axis=-1)))) + np.random.normal(0,res_mask[:,7]), 0.2,1)
             v_rel_col = tangent * np.tile((tangent_res * np.sum(v_rel*tangent, axis=-1))[:,np.newaxis], (1,2)) -\
                   normal * np.tile((normal_res * np.sum(v_rel * normal, axis=-1))[:,np.newaxis], (1,2))
 
@@ -739,8 +738,8 @@ def update_puck(t, mask, t_init, no_M = False, noM_pos = None, noM_vel = None, i
     Bm = drag[mask]
     fm = friction[mask]
     massm = mass[mask]
-    resm_wall = res[mask][:, :7]
-    resm_mallet = res[mask][:,7:]
+    resm_wall = res[mask][:, :8]
+    resm_mallet = res[mask][:,8:]
     bounds_puckm = bounds_puck[mask]
  
     C = getC(v_norm, Bm, fm)
@@ -848,7 +847,7 @@ def update_puck(t, mask, t_init, no_M = False, noM_pos = None, noM_vel = None, i
         
         new_vel_bc = np.tile(velocity(root, Bmw, fmw, massmw, Cw)[:, np.newaxis], (1, 2)) * dirw
         normal_res = np.clip(resw[:,2] + (1-resw[:,2]/resw[:,0])*2*resw[:,0]/(1+np.exp(resw[:,1]*np.square(np.where(wall==0,new_vel_bc[:,0],new_vel_bc[:,1])))) + np.random.normal(0,resw[:,6]), 0.2,1)
-        tangent_res = np.clip(resw[:,5] + (1-resw[:,5]/resw[:,3])*2*resw[:,3]/(1+np.exp(resw[:,4]*np.square(np.where(wall==0,new_vel_bc[:,1],new_vel_bc[:,0])))) + np.random.normal(0,resw[:,6]), 0.2,1)
+        tangent_res = np.clip(resw[:,5] + (1-resw[:,5]/resw[:,3])*2*resw[:,3]/(1+np.exp(resw[:,4]*np.square(np.where(wall==0,new_vel_bc[:,1],new_vel_bc[:,0])))) + np.random.normal(0,resw[:,7]), 0.2,1)
         
         new_vel_bc[:,0] = np.where(wall == 0, -normal_res * new_vel_bc[:,0], tangent_res * new_vel_bc[:,0])
         new_vel_bc[:,1] = np.where(wall == 0, tangent_res * new_vel_bc[:,1], - normal_res * new_vel_bc[:,1])
@@ -1818,7 +1817,7 @@ def display_state(index, puck_pos_noM=None):
     
     cv2.waitKey(1)  # Add small delay so window updates
     #frame_count += 1
-    #if frame_count == 60*5:
+    #if frame_count == 60*15:
     #    out.release()
     #    cv2.destroyAllWindows()
     #    print(1/0.0)

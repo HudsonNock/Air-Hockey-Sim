@@ -79,7 +79,7 @@ def main():
             
             table_bounds = np.array([1.993, 0.992])
             loc2 = np.array([table_bounds[0] - locations[i,0], table_bounds[1]-locations[i,1]])
-            err.append([abs(loc2[0] - loc[0]) * 1e3, abs(loc2[1]-loc[1]) * 1e3])
+            err.append([(loc2[0] - loc[0]) * 1e3, (loc2[1]-loc[1]) * 1e3])
             
             #print(loc)
             #print(loc2)

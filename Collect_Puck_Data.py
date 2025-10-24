@@ -441,7 +441,7 @@ def system_loop(cam, load, pro):
     configure_camera(cam, gain_val=35.0, exposure_val=100.0)
     set_frame_rate(cam, target_fps=120.0)
     
-    puck_data = np.zeros((6000, 5))
+    puck_data = np.zeros((5000, 5))
     time.sleep(2.0)
     
     gc.collect()

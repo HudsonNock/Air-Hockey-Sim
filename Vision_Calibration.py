@@ -336,7 +336,7 @@ def get_init_conditions(pred=0):
 def begin_calibrations(cam):
     """Optimized timing measurement with minimal overhead"""
 
-    j=2
+    j=3
 
     PORT = '/dev/ttyUSB0'  # Adjust this to COM port or /dev/ttyUSBx
     BAUD = 460800
@@ -354,7 +354,7 @@ def begin_calibrations(cam):
     cam.BeginAcquisition()
     
     # Warm up - discard first few fra
-    bright_filter = -1.0 * np.arange(1536)[:,None] / 1536 + 2.0
+    bright_filter = -0.5 * np.arange(1536)[:,None] / 1536 + 1.5
 
     image = cam.GetNextImage()
     img = np.clip(image.GetData().reshape(img_shape) * bright_filter, 0, 255).astype(np.uint8)
@@ -499,11 +499,14 @@ def begin_calibrations(cam):
     
     gc.collect()
     
-    pxls = np.zeros((8*6,2))
-    locations = np.zeros((8*6, 2))
+    #pxls = np.zeros((8*6,2))
+    #locations = np.zeros((8*6, 2))
     
-    #pxls = np.load('pxls_data_1.npy')
-    #locations = np.load('location_data_1.npy')
+    pxls = np.load(f"pxls_data_{j}.npy")
+    locations = np.load(f"location_data_{j}.npy")
+    
+    pxls[39,:] = 0
+    locations[39,:] = 0
     
     gc.collect()
     

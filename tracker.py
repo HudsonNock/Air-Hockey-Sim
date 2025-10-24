@@ -68,9 +68,14 @@ class SetupCamera:
         self.z_pixel_map = np.full((img_shape[0] // 8, img_shape[1] // 8), self.z_params[0], dtype=np.float32)
 
         self.x_offset = 376
+        
+        self.thresh_map = None
+        
+    def set_thresh_map(self, cutoff):
+        self.thresh_map = np.minimum(np.tile(cutoff[:,None], (1,1296)), 225) + 25
 
     def get_puck_pixel(self, frame):
-        mask = cv2.inRange(frame, 150, 255)
+        mask = cv2.compare(frame, self.thresh_map, cv2.CMP_GE)
 
         contours, _ = cv2.findContours(mask, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
         if len(contours) == 0:
@@ -175,7 +180,7 @@ class CameraTracker:
         ]
         
         if len(contours) == 0:
-            return None, None
+            return None, None, True
         
         # Sort by y value of the first point
         #contours.sort(key=lambda c: c[0][0][1])
@@ -219,6 +224,8 @@ class CameraTracker:
         #    cv2.drawContours(self.mask, contours_copy, -1, 100, 2)
         #    cv2.imshow("contours", self.mask)
         #    cv2.waitKey(0)
+        
+        obstructed = True
                     
         if puck_contour is not None:
             puck_contour = np.vstack((puck_contour, puck_center))
@@ -230,8 +237,10 @@ class CameraTracker:
                         self.puck_z,
                         self.z_pixel_map)[:,:2]
             puck_pos = self.fit_circle(points_3D[:-1], points_3D[-1:].squeeze(), joins)
+            if (puck_pos == points_3D[-1:].squeeze()).all():
+                obstructed = False
 
-        return puck_pos, mallet_pos
+        return puck_pos, mallet_pos, obstructed
     
     def circle_fitting_score(self, centers, points):
         """Compute the score based on distance from points to the circle."""
@@ -336,11 +345,13 @@ class CameraTracker:
         return score_points[sorted_indices[-1]]
     
     def process_frame(self, frame, top_down_view=False, printing=False):
-        puck_pos, opponent_mallet_pos = self.track(frame)
+        puck_pos, opponent_mallet_pos, obstructed = self.track(frame)
         if opponent_mallet_pos is None:
             opponent_mallet_pos = self.past_op_mallet_pos
         
+        visable = True
         if puck_pos is None:
+            visable = False
             puck_pos = self.past_puck_pos #2*self.past_puck_pos - self.past_past_puck_pos
 
         self.past_op_mallet_pos = opponent_mallet_pos
@@ -356,6 +367,8 @@ class CameraTracker:
         
         if top_down_view:
         	self.generate_top_down_view(puck_pos, opponent_mallet_pos)
+        	
+        return obstructed, visable
         	
     def generate_top_down_view(self, puck_pos, op_mallet_pos):
 

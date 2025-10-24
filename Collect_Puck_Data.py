@@ -411,11 +411,7 @@ def system_loop(cam, load, pro):
     if not pro:
         opponent_mallet_z = 120.94*10**(-3)
 
-    PORT = '/dev/ttyUSB0'  # Adjust this to COM port or /dev/ttyUSBx
-    BAUD = 460800
-
     # === CONNECT ===
-    ser = serial.Serial(PORT, BAUD, timeout=0)
     if not load:
         time.sleep(1)
         
@@ -445,58 +441,7 @@ def system_loop(cam, load, pro):
     configure_camera(cam, gain_val=35.0, exposure_val=100.0)
     set_frame_rate(cam, target_fps=120.0)
     
-    ser.write(b'\n')
-    while ser.in_waiting == 0:
-        continue
-    ser.reset_input_buffer()
-
-    ser.write(b'\n')
-    input("Place mallet bottom right")
-    
-    ser.write(b'\n')
-    
-    while ser.in_waiting == 0:
-        continue
-    ser.reset_input_buffer()
-    
-    input("Place mallet bottom left")
-    
-    ser.write(b'\n')
-    
-    while ser.in_waiting == 0:
-        continue
-        
-    time.sleep(0.1)
-        
-    pully_R = float(ser.readline().decode('utf-8').strip())
-    print(f"Pulley radius measured as: {pully_R}")
-    ap.pullyR = pully_R
-    ap.C1 = [ap.Vmax * ap.pullyR / 2, ap.Vmax * ap.pullyR / 2]
-    
-    obs[32+14:] = np.array([ap.a1/ap.pullyR * 1e4, ap.a2/ap.pullyR * 1e1, ap.a3/ap.pullyR * 1e0, ap.b1/ap.pullyR * 1e4, ap.b2/ap.pullyR * 1e1])
-    
-    ser.reset_input_buffer()
-    
-    input("Remove calibration device")
-    
-    ser.write(b'\n')
-    
-    while ser.in_waiting == 0:
-        continue
-    ser.reset_input_buffer()
-    
-    input("Turn on Power to Motors")
-
-    ser.write(b'\n')
-    
-    while ser.in_waiting == 0:
-        continue
-    ser.reset_input_buffer()
-
-    
-    input("Enter to Start")
-    
-    puck_data = np.zeros((6000, 3))
+    puck_data = np.zeros((6000, 5))
     time.sleep(2.0)
     
     gc.collect()
@@ -504,27 +449,7 @@ def system_loop(cam, load, pro):
     cam.BeginAcquisition()
     track = None
     
-    ser.reset_input_buffer()
-    
-    while ser.in_waiting < (num_points+1) * 11:
-        pass
-    
-    for _ in range(11):
-        get_mallet(ser)
-    
     if not load:
-        xf = np.array([0.7, 0.2])
-        Vo = np.array([5, 5])
-        
-        get_mallet(ser)
-        pos, vel, acc = get_init_conditions()
-
-        data = ap.update_path(pos, vel, acc, xf, Vo)
-
-        ser.write(b'\n' + data + b'\n')
-
-        time.sleep(1)
-        
         image = cam.GetNextImage()
         img = image.GetData().reshape(img_shape)
         image.Release()
@@ -532,24 +457,7 @@ def system_loop(cam, load, pro):
         y_max = np.max(img[:, int(img.shape[1]/2-30):int(img.shape[1]/2+30)], axis=1)
         cutoff = np.array([np.max(y_max[max(0,i-30):min(i+30, len(y_max))]) for i in range(len(y_max))])
         
-        xf = np.array([0.2, 0.2])
-        Vo = np.array([5, 5])
-        
-        ser.reset_input_buffer()
-        
-        while ser.in_waiting < (num_points+1) * 11:
-            pass
-        
-        for _ in range(11):
-            get_mallet(ser)
-        
-        pos, vel, acc = get_init_conditions()
-
-        data = ap.update_path(pos, vel, acc, xf, Vo)
-
-        ser.write(b'\n' + data + b'\n')
-        
-        time.sleep(1)
+        input("Move mallet up or down")
         
         image = cam.GetNextImage()
         img = image.GetData().reshape(img_shape)
@@ -583,131 +491,42 @@ def system_loop(cam, load, pro):
 
     gc.collect()
     
+    print("Starting in 3s")
+    time.sleep(3)
+    print("Start")
+    
     for _ in range(20):
         image = cam.GetNextImage()
         img = image.GetData().reshape(img_shape)
         track.process_frame(img)
         image.Release()
-        
-    dt = 4.0768/1000
-    ser.reset_input_buffer()
     
-    while ser.in_waiting < (num_points+1) * 11:
-        pass
-        
-    for _ in range(11):
-        get_mallet(ser)
     timer = time.perf_counter()
     idx = 0
     while True:
     
         image = cam.GetNextImage()
         img = image.GetData().reshape(img_shape)
-        track.process_frame(img, top_down_view=True)
+        obstructed, visable = track.process_frame(img)
         image.Release()
-        
-        get_mallet(ser)
-        pos, vel, acc = get_init_conditions()
             
         obs[:20] = track.past_data.get()
         puck_data[idx,:2] = obs[:2]
         puck_dt = time.perf_counter() - timer
         puck_data[idx,2] = puck_dt
-        timer = time.perf_counter()
-        idx += 1
-        if idx == len(puck_data):
-            with open("puck_data.csv", "w", newline="") as f:
-                writer = csv.writer(f)
-                # Write header
-                writer.writerow(["x", "y", "dt"])
-                
-                # Write rows
-                for i in range(len(puck_data)):
-                    writer.writerow([puck_data[i, 0], puck_data[i, 1], puck_data[i, 2]])
-            print("SIGNAL END")
-            break
-        obs[24:26] = obs[20:22] #update past mallet
-        obs[26:28] = obs[22:24]
-        obs[20:22] = pos #add current mallet pos
-        obs[22:24] = vel
-        
-        """
-        tensor_obs = TensorDict({"observation": torch.tensor(obs, dtype=torch.float32)})
-        #print("--")
-        #print(obs)
-                       
-        with torch.no_grad():
-        	policy_out = ap.policy_module(tensor_obs)
-
-        action = policy_out["action"].detach().numpy()
-        obs[28:32] = action
-        #print(action)
-        no_update = (np.linalg.norm(obs[20:22] - obs[24:26]) < 0.01) and (np.linalg.norm(obs[28:30] - action[:2]) < 0.01) and (np.linalg.norm(action[:2] - obs[20:22]) < 0.01)
-        
-        if not no_update:
-            #print('--')
-            #print(obs)
-            #print(action)
-            
-            xf = action[:2]
-
-            xf[0] = np.maximum(margin_bottom+mallet_r, xf[0])
-            xf[0] = np.minimum(table_bounds[0]/2-mallet_r, xf[0])
-
-            xf[1] = np.maximum(margin+mallet_r, xf[1])
-            xf[1] = np.minimum(table_bounds[1]-margin-mallet_r, xf[1])
-            
-            #if time.perf_counter() - timer > 4:
-            #    top = not top
-            #    timer = time.perf_counter()
-            
-            #if top:
-            #    xf[0] = table_bounds[0]/2 - 0.25
-            #    xf[1] = table_bounds[1]/2
-            #else:
-            #    xf[0] = 0.25
-            #    xf[1] = table_bounds[1]/2
-            
-
-            Vo = action[2] * Vmax * np.array([1+action[3],1-action[3]])
-            #Vo[0] = np.minimum(Vo[0], 6)
-            #Vo[1] = np.minimum(Vo[1], 6)
-            #print("A")
-            #print(xf)
-            #print(Vo)
-            
-            #Vo[0] = 7
-            #Vo[1] = 7
-            #obs[28:32] = np.concatenate([xf, Vo], axis=0)
-            get_mallet(ser)
-            mallet_data = mallet_buffer.read()
-            pos, vel, acc = get_init_conditions(pred = dt)
-
-            #new_pos = pos + vel * dt + 0.5 * acc * dt**2
-            #new_vel = vel + acc * dt
-            data = ap.update_path(pos, vel, acc, xf, Vo)
-            ser.write(b'\n' + data + b'\n')
-        """
-        
-        image = cam.GetNextImage()
-        img = image.GetData().reshape(img_shape)
-        track.process_frame(img)
-        image.Release()
-        
-        puck_data[idx,:2] = obs[:2]
-        puck_dt = time.perf_counter() - timer
-        puck_data[idx,2] = puck_dt
+        puck_data[idx,3] = obstructed
+        puck_data[idx,4] = visable
         timer = time.perf_counter()
         idx += 1
         if idx == len(puck_data):
             with open("puck_data_noise_beam.csv", "w", newline="") as f:
                 writer = csv.writer(f)
                 # Write header
-                writer.writerow(["x", "y", "dt"])
+                writer.writerow(["x", "y", "dt", "obstructed", "visable"])
                 
                 # Write rows
                 for i in range(len(puck_data)):
-                    writer.writerow([puck_data[i, 0], puck_data[i, 1], puck_data[i, 2]])
+                    writer.writerow([puck_data[i, 0], puck_data[i, 1], puck_data[i, 2], puck_data[i, 3], puck_data[i, 4]])
             print("SIGNAL END")
             break
     

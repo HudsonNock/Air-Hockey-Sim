@@ -33,13 +33,15 @@ mallet_bounds = np.array([[margin_bounds + mallet_r, table_bounds[0]/2  + mallet
 def main():
     img_shape = (1536, 1296)
 
-    img = np.load('img_data_3.npy')
+    img = np.load('img_data_1.npy')
+    img = np.repeat(img[:,:,None], 3, axis=2)
+    print(img.shape)
     
-    pxls = np.load('pxls_data_3.npy')
-    locations = np.load('location_data_3.npy')
+    pxls = np.load('pxls_data_1.npy')
+    locations = np.load('location_data_1.npy')
     
     for pxl in pxls:
-        cv2.circle(img, (int(pxl[0]) - 376, int(pxl[1])), 10, (255, 0, 0), -1)
+        cv2.circle(img, (int(pxl[0]) - 376, int(pxl[1])), 10, (255, 0, 255), -1)
 
     cv2.imshow('v1', img[::2, ::2])
     cv2.waitKey(0)
@@ -55,7 +57,8 @@ def main():
     track = tracker.CameraTracker(setup.rotation_matrix,
                                   setup.translation_vector,
                                   setup.z_pixel_map,
-                                  70.44*10**(-3)) #(120.94)*10**(-3))
+                                  70.44*10**(-3),
+                                  np.zeros((1536, 1296), dtype=np.uint8)) #(120.94)*10**(-3))
      
     err = []
      

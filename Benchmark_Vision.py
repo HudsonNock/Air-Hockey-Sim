@@ -18,8 +18,8 @@ import tensordict
 from tensordict import TensorDict
 import torch
 
-torch.set_num_threads(2)
-torch.set_num_interop_threads(1)
+#torch.set_num_threads(2)
+#torch.set_num_interop_threads(1)
 
 
 table_bounds = np.array([1.993, 0.992])
@@ -436,7 +436,7 @@ def begin_benchmark(cam):
         cam.EndAcquisition()
                                       
         set_pixel_format(cam, mode="BayerRG8")
-        configure_camera(cam, gain_val=35.0, exposure_val=100.0)
+        configure_camera(cam, gain_val=33.0, exposure_val=100.0)
         set_frame_rate(cam, target_fps=120.0)
         
         print("Remove mallet + puck from view")
@@ -564,7 +564,7 @@ def begin_benchmark(cam):
         gc.collect()
 
         errs = np.load("benchmark_errs.npy")
-        errs[-6,:] = 0
+        errs[int(len(errs)/2):, :] = 0
 
         for idx, target_puck in enumerate(target_puck_points):
             if errs[idx, 0] != 0:
@@ -650,7 +650,7 @@ def begin_benchmark(cam):
                     
                     #np.save(f"pxls_data_{j}.npy", np.array(pxls))  
                     #np.save(f"location_data_{j}.npy", np.array(locations))
-                    np.save(f"benchmark_errs.npy", errs)
+                    #np.save(f"benchmark_errs.npy", errs)
                     break
                 
                 cv2.imshow("top_down_table", top_down_image)
@@ -665,10 +665,10 @@ def begin_benchmark(cam):
 
 
 def main():
-    if os.geteuid() != 0:
-        print("Warning: Not running as root. Real-time performance may be limited.")
-        print("Run with: sudo python3 script.py")
-        return
+    #if os.geteuid() != 0:
+    #    print("Warning: Not running as root. Real-time performance may be limited.")
+    #    print("Run with: sudo python3 script.py")
+    #    return
     
     system = PySpin.System.GetInstance()
     
@@ -686,9 +686,9 @@ def main():
     cam = cam_list.GetByIndex(0)
     try:
         cam.Init()
-        set_realtime_priority()
+        #set_realtime_priority()
         
-        check_isolation_status()
+        #check_isolation_status()
         
         configure_buffer_handling(cam)
         set_roi(cam,1296,1536,376,0)

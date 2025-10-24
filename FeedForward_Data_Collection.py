@@ -332,7 +332,7 @@ def collect_data():
             #print(pwms)
             #print("------")
             #print(dts)
-            with open("feedforward_data.csv", "w", newline="") as f:
+            with open("bluepill_period_time.csv", "w", newline="") as f:
                 writer = csv.writer(f)
                 # Write header
                 writer.writerow(["x", "y", "Left_PWM", "Right_PWM", "dt"])

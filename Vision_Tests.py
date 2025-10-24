@@ -373,7 +373,7 @@ def object_loc(cam, load):
             cam.EndAcquisition()
                                           
             set_pixel_format(cam, mode="BayerRG8")
-            configure_camera(cam, gain_val=35.0, exposure_val=100.0)
+            configure_camera(cam, gain_val=33.0, exposure_val=100.0)
             set_frame_rate(cam, target_fps=120.0)
             
             print("Remove mallet + puck from view")

@@ -8,11 +8,37 @@ import os
 import sys
 import ctypes
 import ctypes.util
+import tracker
 import cv2
 import serial
+import gc
 import struct
-import termios
+import tensordict
+from tensordict import TensorDict
+import torch
+import agent_processing as ap
+import argparse
+import csv
 
+torch.set_num_threads(2)
+torch.set_num_interop_threads(1)
+
+table_bounds = np.array([1.993, 0.992])
+obs_dim = 51
+obs = np.zeros((obs_dim,), dtype=np.float32)
+obs[32:32+14] = np.array([[0.75, 0.01, 0.7, 0.7, 0.01, 0.65, 0.02, 0.8, 0.01, 0.75, 0.74, 0.01, 0.73, 0.02]])
+#obs[32+7:32+14] = np.array([0.8, 0.3, 0.6, 0.7, 0.2, 0.4, 0.03]) #mallet res
+obs[32+14:] = np.array([ap.a1/ap.pullyR * 1e4, ap.a2/ap.pullyR * 1e1, ap.a3/ap.pullyR * 1e0, ap.b1/ap.pullyR * 1e4, ap.b2/ap.pullyR * 1e1])
+obs[32+14:] *= 1.2
+#e_n0, e_nr, e_nf, e_t0, e_tr, e_tf, std
+
+margin = 0.03
+margin_bottom = 0.03
+
+mallet_r = 0.1011 / 2
+puck_r = 0.0629 / 2
+
+Vmax = 24 * 0.8
 def set_realtime_priority():
     os.sched_setaffinity(0, {2,3})
     SCHED_FIFO = 1
@@ -59,22 +85,20 @@ def check_isolation_status():
     except:
         print("Could not check processes on CPU 2")
         
-def get_mallet(ser):
-    if not ser.in_waiting:
-        return None, None, None, False
+def deq(q, xmin, xmax):
+    y = q/32767.0
+    return (y+1)/2 * (xmax - xmin) + xmin
     
-    FMT = '<hhhhhhB'    # 6×int16, 1×uint8
+def get_mallet(ser):    
+    FMT = '<hhhB'    # 6×int16, 1×uint8
     FRAME_SIZE = struct.calcsize(FMT)
     
-    def deq(q, xmin, xmax):
-        y = q/32767
-        return (y+1)/2 * (xmax - xmin) + xmin
-    
     # Read entire buffer
-    buffer = ser.read(max(ser.in_waiting, 33))
+    #while ser.in_waiting < 33:
+    #    pass
+    search_buffer = ser.read(ser.in_waiting)
     
     # Start from the last 29 bytes
-    search_buffer = buffer[-33:]
     
     # Find the start marker (0xAA)
     start_idx = -1
@@ -100,12 +124,11 @@ def get_mallet(ser):
     
     # Check end marker
     if frame_end >= len(search_buffer) or search_buffer[frame_end] != 0x55:
-        print(buffer)
         print("Invalid end marker")
         return None, None, None, False
     
     # Unpack the data
-    p0, p1, v0, v1, a0, a1, chk = struct.unpack(FMT, raw)
+    p0, p1, pwm0, pwm1, dt, chk = struct.unpack(FMT, raw)
 
     # Verify checksum
     c = 0
@@ -115,71 +138,224 @@ def get_mallet(ser):
         print("bad checksum", c, chk)
         return None, None, None, False
     
-    pos = np.array([deq(p0, 0, 10), deq(p1, -1, 2)])
-    vel = np.array([deq(v0, -30, 30), deq(v1, -30, 30)])
-    acc = np.array([deq(a0, -150, 150), deq(a1, -150, 150)])
+    pos = np.array([deq(p0, -0.5, 2), deq(p1, -0.5, 2)])
+    vel = np.array([0,0])
+    acc = np.array([0,0])
     
     return pos, vel, acc, True
 
-def precise_timing_measurement(N_TESTS=2000):
+def collect_data():
     """Optimized timing measurement with minimal overhead"""
     
-    # Pre-allocate arrays
-    times = np.zeros(N_TESTS, dtype=np.float64)
-    
     # Disable garbage collection during measurement
-
+    #try:
     
-    try:
+    PORT = '/dev/ttyUSB0'  # Adjust this to COM port or /dev/ttyUSBx
+    BAUD = 460800
 
-        PORT = '/dev/ttyUSB0'  # Adjust this to COM port or /dev/ttyUSBx
-        BAUD = 460800
-
-        # === CONNECT ===
-        ser = serial.Serial(PORT, BAUD, timeout=1)
-
-        time.sleep(2)  # Wait for serial connection to settle
-
-        # === LOOP ===
-
-        ser.flushInput()
-        for i in range(N_TESTS):
-            passed = False
-            time.sleep(0.005)
-            start = time.perf_counter()
-            while not passed:
-                pos, vel, acc, passed = get_mallet(ser)
-            #time.sleep(0.6)
-            #print(pos[0])
-            times[i] = (time.perf_counter() - start) * 1000
-            #print(times[i])
-            #times[i] = pos[0]
-
-    except Exception as e:
-        print("err")
-        print(e)
+    ser = serial.Serial(PORT, BAUD, timeout=0)
     
-    # Analyze timing
-    avg_interval = np.mean(times)
-    std_dev = np.std(times)
-    min_interval = np.min(times)
-    max_interval = np.max(times)
-    
-    print(f"\n=== Optimized Timing Analysis ===")
-    print(f"Average interval: {avg_interval:.4f}ms")
-    print(f"Standard deviation: {std_dev:.4f}ms")
-    print(f"Min interval: {min_interval:.4f}ms")
-    print(f"Max interval: {max_interval:.4f}ms")
-    print(f"Jitter range: {max_interval - min_interval:.4f}ms")
-    print(f"Actual FPS: {1000/avg_interval:.2f}")
-    
-    
-    # Percentile analysis
-    percentiles = [50, 90, 95, 99, 99.9]
-    for p in percentiles:
-        val = np.percentile(times, p)
-        print(f"{p}th percentile: {val:.4f}ms")
+    ser.write(b'\n')
+    while ser.in_waiting == 0:
+        continue
+    ser.reset_input_buffer()
 
+    ser.write(b'\n')
+    input("Place mallet bottom right")
+    
+    ser.write(b'\n')
+    
+    while ser.in_waiting == 0:
+        continue
+    ser.reset_input_buffer()
+    
+    input("Place mallet bottom left")
+    
+    ser.write(b'\n')
+    
+    while ser.in_waiting == 0:
+        continue
+        
+    time.sleep(0.1)
+        
+    pully_R = float(ser.readline().decode('utf-8').strip())
+    print(f"Pulley radius measured as: {pully_R}")
+    ap.pullyR = pully_R
+    ap.C1 = [ap.Vmax * ap.pullyR / 2, ap.Vmax * ap.pullyR / 2]
+    
+    ser.reset_input_buffer()
+    
+    input("Remove calibration device")
+    
+    ser.write(b'\n')
+    
+    while ser.in_waiting == 0:
+        continue
+    ser.reset_input_buffer()
+    
+    input("Turn on Power to Motors")
+
+    ser.write(b'\n')
+    
+    while ser.in_waiting == 0:
+        continue
+    ser.reset_input_buffer()
+    
+    input("Enter to Start")
+    gc.collect()
+    
+    time.sleep(0.5)
+    pos = np.array([0.3, 0.3])
+    vel = np.array([0,0])
+    acc = np.array([0,0])
+            
+    xf = np.array([0.7, 0.5])
+    Vo = np.array([12, 12])
+    
+    data = ap.update_path(pos, vel, acc, xf, Vo)
+    ser.write(b'\n' + data + b'\n')
+    
+    buffer = bytearray()
+    
+    FMT = '<hhhB'    # 5×int16, 1×uint8
+    FRAME_SIZE = struct.calcsize(FMT)
+    
+    sample_len = 10000
+    pos = np.zeros((sample_len,2))
+    pwms = np.zeros((sample_len,2))
+    dts = np.zeros((sample_len,))
+    
+    signal_end = False
+    
+    t1 = time.perf_counter()
+    counter = 0
+    pos[0,:] = pully_R
+    idx = 1
+    
+    delay = 1/60.0
+    
+    while True:
+        # Read entire buffer
+        
+        if time.perf_counter() - t1 > delay:
+            #delay = np.random.random() * (0.08 - 0.02) + 0.02
+            if idx > 21:
+                #counter += 1
+                xf = np.array([np.random.random() * (0.4) + 0.3, np.random.random() * 0.4 + 0.3])
+                #Vo = np.array([np.random.random() * 5 + 16, np.random.random() * 5 + 16])
+                Vo = np.array([12, 12])
+                
+                ts = np.cumsum(dts[idx-21:idx])
+                coef_x = np.polyfit(ts, pos[idx-21:idx,0], 2)
+                coef_y = np.polyfit(ts, pos[idx-21:idx,1], 2)
+                
+                t = ts[-1] + 0.004
+                
+                pred_pos = np.array([coef_x[0]*t**2 + coef_x[1]*t + coef_x[2], \
+                                coef_y[0]*t**2 + coef_y[1]*t + coef_y[2]])
+                                
+                pred_vel = np.array([2*coef_x[0]*t + coef_x[1], \
+                                2*coef_y[0]*t + coef_y[1]])
+                                
+                pred_acc = np.array([2*coef_x[0], \
+                                2*coef_y[0]])
+
+                data = ap.update_path(pred_pos, pred_vel, pred_acc, xf, Vo)
+                ser.write(b'\n' + data + b'\n')
+                t1 = time.perf_counter()
+        
+           
+        if ser.in_waiting > 1000:
+            print(ser.in_waiting)
+            print(1/0)
+        while ser.in_waiting < 33:
+            pass
+        buffer.extend(ser.read(ser.in_waiting))
+            
+        while len(buffer) > 60:
+            # Find the start marker (0xAA)
+            start_idx = 0
+            if buffer[0] != 0xFF or buffer[1] != 0xFF or buffer[2] != 0xFF:
+                print("ERROR")
+                print(buffer)
+                print(1/0)
+                break
+            
+            # Check if we have enough bytes for a complete frame after the start marker
+            remaining_bytes = len(buffer) - start_idx - 1  # -1 for the start marker itself
+            if remaining_bytes < FRAME_SIZE + 1:  # +1 for end marker
+                break
+            
+            # Extract the frame data
+            frame_start = 3
+            frame_end = frame_start + FRAME_SIZE
+            raw = buffer[frame_start:frame_end]
+            buffer = buffer[frame_end+1:]
+
+            # Check end marker
+            if frame_end >= len(buffer) or buffer[frame_end] != 0x55:
+                print("Invalid end marker")
+                break
+
+            # Unpack the data
+            p0, p1, dt, chk = struct.unpack(FMT, raw)
+
+            # Verify checksum
+            c = 0
+            for b in raw[:-1]:
+                c ^= b
+            if c != chk:
+                print("bad checksum")
+
+            pos[idx, :] = np.array([deq(p0, -0.5, 2), deq(p1, -0.5, 2)])
+            dts[idx] = deq(dt, 0, 2)
+    
+            #if abs(deq(v0, -1.1, 1.1)) < 0.02 and abs(deq(v1, -1.1, 1.1)) < 0.02:
+            #    #print(abs(deq(v0, -1.1, 1.1)))
+            #    #print(abs(deq(v1, -1.1, 1.1)))
+            #    #print("B")
+            #    signal_end = True
+            #    break
+            
+            idx += 1
+            
+            if idx == sample_len:
+                signal_end = True
+                break
+            
+                
+        if signal_end:
+            #print("------")
+            #print(pos)
+            #print("------")
+            #print(pwms)
+            #print("------")
+            #print(dts)
+            with open("bluepill_feedback_delay_time2.csv", "w", newline="") as f:
+                writer = csv.writer(f)
+                # Write header
+                writer.writerow(["dt"])
+                
+                # Write rows
+                for dt in dts:
+                    writer.writerow([dt])
+            print("SIGNAL END")
+            break
+                
+            
+    #except Exception as e:
+    #    print("err")
+    #    print(e)
+
+def str2bool(v):
+    if isinstance(v, bool):
+        return v
+    if v.lower() in ('yes', 'true', 't', '1'):
+        return True
+    elif v.lower() in ('no', 'false', 'f', '0'):
+        return False
+    else:
+        raise argparse.ArgumentTypeError('Boolean value expected.')
 
 
 def main():
@@ -188,15 +364,11 @@ def main():
         print("Run with: sudo python3 script.py")
         return
 
-    try:
-        set_realtime_priority()
-        
-        check_isolation_status()
-        
-        precise_timing_measurement()
+    set_realtime_priority()
+    
+    check_isolation_status()
 
-    except Exception as ex: #PySpin.SpinnakerException as ex:
-        print("Error: %s" % ex)
+    collect_data()
 
 if __name__ == "__main__":
     main()

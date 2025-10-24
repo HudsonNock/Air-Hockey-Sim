@@ -336,7 +336,7 @@ def get_init_conditions(pred=0):
 def begin_calibrations(cam):
     """Optimized timing measurement with minimal overhead"""
 
-    j=3
+    j=4
 
     PORT = '/dev/ttyUSB0'  # Adjust this to COM port or /dev/ttyUSBx
     BAUD = 460800
@@ -505,8 +505,11 @@ def begin_calibrations(cam):
     pxls = np.load(f"pxls_data_{j}.npy")
     locations = np.load(f"location_data_{j}.npy")
     
-    pxls[39,:] = 0
-    locations[39,:] = 0
+    pxls[42,:] = 0
+    locations[42,:] = 0
+    
+    pxls[43,:] = 0
+    locations[43,:] = 0
     
     gc.collect()
     

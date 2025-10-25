@@ -638,7 +638,7 @@ def system_loop(cam, load, pro):
         idx += 1
         
         if idx == len(recording_data):
-            with open("system_loop_data.csv", "w", newline="") as f:
+            with open("system_loop_data2.csv", "w", newline="") as f:
                 writer = csv.writer(f)
                 # Write header
                 writer.writerow(["Px", "Py", "Mx", "My", "Mxv", "Myv", "dt"])

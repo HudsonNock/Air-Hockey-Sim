@@ -420,7 +420,7 @@ def system_loop(cam, load, pro):
         time.sleep(1)
         
         set_pixel_format(cam, mode="Mono8")
-        configure_camera(cam, gain_val=10.0, exposure_val=6000.0)
+        configure_camera(cam, gain_val=1.0, exposure_val=10000.0)
         set_frame_rate(cam, target_fps=20.0)
         
         cam.BeginAcquisition()
@@ -428,13 +428,26 @@ def system_loop(cam, load, pro):
         image = cam.GetNextImage()
         img = image.GetData().reshape(img_shape)
         image.Release()
+            
+        bright_filter = -0.5 * np.arange(1536)[:,None] / 1536 + 1.5
+
+        image = cam.GetNextImage()
+        img = np.clip(image.GetData().reshape(img_shape) * bright_filter, 0, 255).astype(np.uint8)
+        image.Release()
+        
+        #while True:
+        #    cv2.imshow("arucos", img)
+        #    cv2.waitKey(1)
+        #    image = cam.GetNextImage()
+        #    img = image.GetData().reshape(img_shape)
+        #    image.Release()
         
         setup = tracker.SetupCamera()
         while not setup.run_extrinsics(img):
             cv2.imshow("arucos", img[::2, ::2])
             cv2.waitKey(0)
             image = cam.GetNextImage()
-            img = image.GetData().reshape(img_shape)
+            img = np.clip(image.GetData().reshape(img_shape) * bright_filter, 0, 255).astype(np.uint8)
             image.Release()
             
         cv2.destroyAllWindows()
@@ -442,7 +455,7 @@ def system_loop(cam, load, pro):
         cam.EndAcquisition()
         
     set_pixel_format(cam, mode="BayerRG8")
-    configure_camera(cam, gain_val=35.0, exposure_val=100.0)
+    configure_camera(cam, gain_val=33.0, exposure_val=100.0)
     set_frame_rate(cam, target_fps=120.0)
     
     ser.write(b'\n')
@@ -597,7 +610,7 @@ def system_loop(cam, load, pro):
         get_mallet(ser)
     #timer = time.perf_counter()
     
-    recording_data = np.zeros([5000, 7])
+    recording_data = np.zeros([10000, 7])
     idx = 0
     timer = time.perf_counter()
     while True:
@@ -673,8 +686,8 @@ def system_loop(cam, load, pro):
             
 
             Vo = action[2] * Vmax * np.array([1+action[3],1-action[3]])
-            #Vo[0] = np.minimum(Vo[0], 3)
-            #Vo[1] = np.minimum(Vo[1], 3)
+            #Vo[0] = np.minimum(Vo[0], 5)
+            #Vo[1] = np.minimum(Vo[1], 5)
             #print("A")
             #print(xf)
             #print(Vo)
@@ -742,7 +755,7 @@ def main():
         
     parser = argparse.ArgumentParser()
     parser.add_argument("--load", type=str2bool, default=False)
-    parser.add_argument("--pro", type=str2bool, default=False)
+    parser.add_argument("--pro", type=str2bool, default=True)
     args = parser.parse_args()
     
     system = PySpin.System.GetInstance()

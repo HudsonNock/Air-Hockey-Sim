@@ -610,7 +610,7 @@ def system_loop(cam, load, pro):
         get_mallet(ser)
     #timer = time.perf_counter()
     
-    recording_data = np.zeros([10000, 7])
+    recording_data = np.zeros([20000, 7])
     idx = 0
     timer = time.perf_counter()
     while True:
@@ -638,7 +638,7 @@ def system_loop(cam, load, pro):
         idx += 1
         
         if idx == len(recording_data):
-            with open("system_loop_data3.csv", "w", newline="") as f:
+            with open("system_loop_data6.csv", "w", newline="") as f:
                 writer = csv.writer(f)
                 # Write header
                 writer.writerow(["Px", "Py", "Mx", "My", "Mxv", "Myv", "dt"])
@@ -723,7 +723,7 @@ def system_loop(cam, load, pro):
         idx += 1
         
         if idx == len(recording_data):
-            with open("system_loop_data.csv", "w", newline="") as f:
+            with open("system_loop_data6.csv", "w", newline="") as f:
                 writer = csv.writer(f)
                 # Write header
                 writer.writerow(["Px", "Py", "Mx", "My", "Mxv", "Myv", "dt"])

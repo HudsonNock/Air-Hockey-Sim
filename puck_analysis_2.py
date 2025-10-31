@@ -1,3 +1,9 @@
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import numpy as np
+from sklearn.preprocessing import StandardScaler
+
 """
 Air hockey trajectory segmentation and wall-collision detection
 
@@ -1107,146 +1113,155 @@ y_train = y
 #X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0, random_state=42)
 
 # Scale the data
+class HeteroscedasticNN(nn.Module):
+    def __init__(self, input_dim=2, hidden_dim=12, output_dim=2):
+        super(HeteroscedasticNN, self).__init__()
+        
+        self.fc1 = nn.Linear(input_dim, hidden_dim)
+        self.fc2 = nn.Linear(hidden_dim, hidden_dim)
+        self.predictions = nn.Linear(hidden_dim, output_dim)
+        self.log_sigmas = nn.Linear(hidden_dim, output_dim)
+        
+        # Scale parameter for sigmas (initialized to 1.0, set later for denormalization)
+        self.register_buffer('sigma_scale', torch.ones(output_dim))
+        
+    def forward(self, x):
+        x = torch.tanh(self.fc1(x))
+        x = torch.tanh(self.fc2(x))
+        
+        # Predictions
+        preds = self.predictions(x)
+        
+        # Sigmas: softplus to ensure positive, add epsilon, then scale
+        log_sig = self.log_sigmas(x)
+        sigmas = (F.softplus(log_sig) + 1e-6) * self.sigma_scale
+        
+        # Concatenate predictions and sigmas
+        return torch.cat([preds, sigmas], dim=1)
+
+# Gaussian negative log-likelihood loss
+def gaussian_nll_loss(y_pred, y_true):
+    """
+    y_pred: [batch_size, 4] containing [pred1, pred2, sigma1, sigma2]
+    y_true: [batch_size, 2] containing [true1, true2]
+    """
+    predictions = y_pred[:, :2]
+    sigmas = y_pred[:, 2:]
+    
+    squared_error = (y_true - predictions) ** 2
+    variance = sigmas ** 2
+    
+    nll = 0.5 * torch.log(variance) + squared_error / (2 * variance)
+    
+    return nll.mean()
+
+# Training setup
 scaler_X = StandardScaler()
 scaler_y = StandardScaler()
 
 X_train_scaled = scaler_X.fit_transform(X_train)
-#X_test_scaled = scaler_X.transform(X_test)
 y_train_scaled = scaler_y.fit_transform(y_train)
-#y_test_scaled = scaler_y.transform(y_test)
 
-# Build neural network
-    
-class SigmaLayer(keras.layers.Layer):
-    def __init__(self, **kwargs):
-        super(SigmaLayer, self).__init__(**kwargs)
-        
-    def build(self, input_shape):
-        # Initialize scale to 1.0 (no scaling initially)
-        self.scale = self.add_weight(
-            name='scale',
-            shape=(input_shape[-1],),  # One scale per output dimension
-            initializer=keras.initializers.Ones(),
-            trainable=False  # We'll set this manually, not train it
-        )
-        super(SigmaLayer, self).build(input_shape)
-    
-    def call(self, inputs):
-        # Apply softplus, add epsilon, then scale
-        return (K.softplus(inputs) + 1e-6) * self.scale
-    
-    def get_config(self):
-        config = super(SigmaLayer, self).get_config()
-        return config
+# Convert to PyTorch tensors
+X_train_tensor = torch.FloatTensor(X_train_scaled)
+y_train_tensor = torch.FloatTensor(y_train_scaled)
 
-# Build neural network with 4 outputs: angle_out, vel_out, sigma_angle, sigma_vel
-inputs = keras.layers.Input(shape=(2,))
-x = keras.layers.Dense(8, activation='tanh')(inputs)
-x = keras.layers.Dense(8, activation='tanh')(x)
+model_path = 'collision_model_heteroscedastic.pt' if wall_collisions else 'mallet_collision_model_heteroscedastic.pt'
 
-# Split into predictions and log-sigmas
-predictions = keras.layers.Dense(2, name='predictions')(x)  # angle_out, vel_out
-log_sigmas = keras.layers.Dense(2, name='log_sigmas')(x)    # log(sigma_angle), log(sigma_vel)
-sigmas = SigmaLayer(name='sigmas')(log_sigmas)
 
-# Concatenate outputs
-outputs = keras.layers.Concatenate()([predictions, sigmas])
+# Create model
+model = HeteroscedasticNN(input_dim=2, hidden_dim=8, output_dim=2)
+optimizer = torch.optim.Adam(model.parameters())
 
-model = keras.Model(inputs=inputs, outputs=outputs)
-
-# Custom loss function: Negative Log Likelihood of Gaussian
-def gaussian_nll_loss(y_true, y_pred):
-    """
-    Negative log-likelihood loss for heteroscedastic regression.
-    y_pred contains: [angle_pred, vel_pred, sigma_angle, sigma_vel]
-    y_true contains: [angle_true, vel_true]
-    """
-    # Split predictions and sigmas
-    predictions = y_pred[:, :2]  # First 2 outputs
-    sigmas = y_pred[:, 2:]       # Last 2 outputs
-    
-    # Calculate negative log likelihood
-    # -log(Gaussian PDF) = 0.5 * log(2*pi*sigma^2) + (y_true - y_pred)^2 / (2*sigma^2)
-    # Simplified: 0.5 * log(sigma^2) + (y_true - y_pred)^2 / (2*sigma^2)
-    
-    squared_error = K.square(y_true - predictions)
-    variance = K.square(sigmas)
-    
-    nll = 0.5 * K.log(variance) + squared_error / (2 * variance)
-    
-    return K.mean(nll)
-
-"""
-model.compile(optimizer='adam', loss=gaussian_nll_loss)
-
-# Train the model
-
+# Training loop
 print("Training heteroscedastic neural network...")
-history = model.fit(
-    X_train_scaled, y_train_scaled,
-    epochs= 3000,
-    batch_size=32,
-    validation_split=0.0,
-    verbose=0
-)
 
-def embed_normalization_into_model(model, scaler_X, scaler_y):
+model.train()
+for epoch in range(3000):
+    optimizer.zero_grad()
     
-    # Get the scalers' parameters
-    X_mean = scaler_X.mean_
-    X_std = scaler_X.scale_
-    y_mean = scaler_y.mean_
-    y_std = scaler_y.scale_
+    # Forward pass
+    y_pred = model(X_train_tensor)
+    loss = gaussian_nll_loss(y_pred, y_train_tensor)
+    
+    # Backward pass
+    loss.backward()
+    optimizer.step()
+    
+    if (epoch + 1) % 500 == 0:
+        print(f"Epoch {epoch+1}/3000, Loss: {loss.item():.6f}")
+
+print("Training complete!")
+
+# Embed normalization into model weights
+def embed_normalization_into_model(model, scaler_X, scaler_y):
+    model.eval()
+    
+    X_mean = torch.FloatTensor(scaler_X.mean_)
+    X_std = torch.FloatTensor(scaler_X.scale_)
+    y_mean = torch.FloatTensor(scaler_y.mean_)
+    y_std = torch.FloatTensor(scaler_y.scale_)
     
     # === Embed input normalization into first layer ===
-    first_layer = model.layers[1]  # First Dense layer after Input
-    W1, b1 = first_layer.get_weights()
-    
-    # Transform: x_normalized = (x - mean) / std
-    # New weights: W1_new = W1 / std, b1_new = b1 - W1 @ (mean / std)
-    W1_new = W1 / X_std[:, np.newaxis]
-    b1_new = b1 - (X_mean / X_std) @ W1
-    
-    first_layer.set_weights([W1_new, b1_new])
-    
-    # === Embed output denormalization into predictions layer ===
-    # Find the predictions layer (outputs the first 2 values)
-    predictions_layer = model.get_layer('predictions')
-    W_pred, b_pred = predictions_layer.get_weights()
-    
-    # Transform: y_denormalized = y_normalized * std + mean
-    # New weights: W_new = W * std, b_new = b * std + mean
-    W_pred_new = W_pred * y_std[np.newaxis, :]
-    b_pred_new = b_pred * y_std + y_mean
-    
-    predictions_layer.set_weights([W_pred_new, b_pred_new])
-    
-    sigmas_layer = model.get_layer('sigmas')
-    # Set the scale weights to y_std
-    sigmas_layer.set_weights([y_std])
+    with torch.no_grad():
+        W1 = model.fc1.weight.data  # Shape: [hidden_dim, input_dim]
+        b1 = model.fc1.bias.data    # Shape: [hidden_dim]
+        
+        # PyTorch uses transposed weight convention: output = x @ W^T + b
+        # For normalization: x_norm = (x - mean) / std
+        # New: output = ((x - mean) / std) @ W^T + b
+        #            = x @ (W^T / std) - (mean / std) @ W^T + b
+        W1_new = W1 / X_std.unsqueeze(0)  # Divide each column by std
+        b1_new = b1 - (X_mean / X_std) @ W1.T
+        
+        model.fc1.weight.data = W1_new
+        model.fc1.bias.data = b1_new
+        
+        # === Embed output denormalization into predictions layer ===
+        W_pred = model.predictions.weight.data
+        b_pred = model.predictions.bias.data
+        
+        # Transform: y_denorm = y_norm * std + mean
+        W_pred_new = W_pred * y_std.unsqueeze(1)
+        b_pred_new = b_pred * y_std + y_mean
+        
+        model.predictions.weight.data = W_pred_new
+        model.predictions.bias.data = b_pred_new
+        
+        # === Set sigma scaling ===
+        model.sigma_scale.copy_(y_std)
     
     return model
 
-# Apply the transformation
+# Embed normalization
 embed_normalization_into_model(model, scaler_X, scaler_y)
 
-model.compile(optimizer='adam', loss='mse')  
-
 # Save model
-if wall_collisions:
-    model.save('collision_model_heteroscedastic.keras')
-else:
-    model.save('mallet_collision_model_heteroscedastic.keras')
 
+torch.save(model.state_dict(), model_path)
+#print(f"Model saved to {model_path}")
+
+# To save the entire model (including architecture):
+#torch.save(model, model_path.replace('.pt', '_full.pt'))
+
+# Make predictions (no scaling needed!)
+model.eval()
+
+# ===== LOADING THE MODEL =====
 """
-model = keras.models.load_model(
-    'collision_model_heteroscedastic.keras',
-    custom_objects={'SigmaLayer': SigmaLayer}
-)
+
+# Option 1: Load state dict (requires model definition)
+# Option 2: Load full model (if saved with torch.save(model, ...))
+model = HeteroscedasticNN(input_dim=2, hidden_dim=8, output_dim=2)
+model.load_state_dict(torch.load(model_path))
+model.eval()
+"""
+
+# Use loaded model
+with torch.no_grad():
+    y_pred_full = model(torch.FloatTensor(X)).numpy()
 
 
-# Make predictions
-y_pred_full = model.predict(X, verbose=0)
 y_pred = y_pred_full[:,:2]
 
 angle_pred = y_pred[:, 0]
@@ -1276,7 +1291,8 @@ for i, vel_fixed in enumerate(vel_values):
     X_pred = np.column_stack([angle_range, np.full_like(angle_range, vel_fixed)])
     
     # Predict
-    y_pred_full = model.predict(X_pred, verbose=0)
+    with torch.no_grad():
+        y_pred_full = model(torch.FloatTensor(X_pred)).numpy()
     angle_out_sigma = y_pred_full[:,2]
     
     ax1.plot(angle_range, angle_out_sigma, linewidth=2, color=colors[i], 
@@ -1298,7 +1314,8 @@ for i, angle_fixed in enumerate(angle_values):
     X_pred = np.column_stack([np.full_like(vel_range, angle_fixed), vel_range])
     
     # Predict
-    y_pred_full = model.predict(X_pred, verbose=0)
+    with torch.no_grad():
+        y_pred_full = model(torch.FloatTensor(X_pred)).numpy()
     vel_out_sigma = y_pred_full[:,3]
     
     ax2.plot(vel_range, vel_out_sigma, linewidth=2, color=colors2[i], 
@@ -1387,7 +1404,8 @@ for i, vel_fixed in enumerate(vel_values):
     X_pred = np.column_stack([angle_range, np.full_like(angle_range, vel_fixed)])
     
     # Predict
-    y_pred_full = model.predict(X_pred, verbose=0)
+    with torch.no_grad():
+        y_pred_full = model(torch.FloatTensor(X_pred)).numpy()
     y_pred = y_pred_full[:,:2]
     angle_out_pred = y_pred[:, 0]
     
@@ -1420,7 +1438,8 @@ for i, angle_fixed in enumerate(angle_values):
     X_pred = np.column_stack([np.full_like(vel_range, angle_fixed), vel_range])
     
     # Predict
-    y_pred_full = model.predict(X_pred, verbose=0)
+    with torch.no_grad():
+        y_pred_full = model(torch.FloatTensor(X_pred)).numpy()
     y_pred = y_pred_full[:,:2]
     vel_out_pred = y_pred[:, 1]
     

@@ -8,12 +8,16 @@ from itertools import product
 from chandrupatla import chandrupatla
 import time as tme
 import cv2
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
 
 # Initialize pygame
 print("STARTING")
 
-width = 1.9885
-height = 0.9905
+height = 1.993
+width = 0.992
+
 bounds = np.array([width, height])
 plr = 500
 screen_width = int(width*plr)
@@ -33,7 +37,7 @@ blue = (0,0,255)
 #out = cv2.VideoWriter("183_vid_def.avi", fourcc, 60.0, (screen_width, screen_height))
 #frame_count = 0
 
-def initalize(envs, mallet_r=0.05, puck_r=0.05, goal_w=0.35, V_max=24, pully_radius=0.035306, coll_vars=None, ab_vars=None, puck_inits=None):
+def initalize(envs, mallet_r=0.05, puck_r=0.05, goal_w=0.35, V_max=24, pully_radius=0.035306, ab_vars=None, puck_inits=None):
     global game_number 
     global time
     global mallet_radius
@@ -57,10 +61,10 @@ def initalize(envs, mallet_r=0.05, puck_r=0.05, goal_w=0.35, V_max=24, pully_rad
     global drag
     global friction
     global mass
-    global res
     global puck_init
     global sink_bounds
     global sinks
+    global res_model
 
     time = 0
 
@@ -112,7 +116,37 @@ def initalize(envs, mallet_r=0.05, puck_r=0.05, goal_w=0.35, V_max=24, pully_rad
     drag = 0.0012273 + np.random.random((game_number,))*0.0004
     friction = 0.00103794 + np.random.random((game_number,))*0.0004
     mass = 0.00736196 + np.random.random((game_number,)) * 0.0008
-    res = coll_vars
+
+    class HeteroscedasticNN(nn.Module):
+        def __init__(self, input_dim=2, hidden_dim=10, output_dim=2):
+            super(HeteroscedasticNN, self).__init__()
+            
+            self.fc1 = nn.Linear(input_dim, hidden_dim)
+            self.fc2 = nn.Linear(hidden_dim, hidden_dim)
+            self.predictions = nn.Linear(hidden_dim, output_dim)
+            self.log_sigmas = nn.Linear(hidden_dim, output_dim)
+            
+            # Scale parameter for sigmas (initialized to 1.0, set later for denormalization)
+            self.register_buffer('sigma_scale', torch.ones(output_dim))
+            
+        def forward(self, x):
+            x = F.softplus(self.fc1(x))
+            x = F.softplus(self.fc2(x))
+            
+            # Predictions
+            preds = self.predictions(x)
+            
+            # Sigmas: softplus to ensure positive, add epsilon, then scale
+            log_sig = self.log_sigmas(x)
+            sigmas = (F.softplus(log_sig) + 1e-6) * self.sigma_scale
+            
+            # Concatenate predictions and sigmas
+            return torch.cat([preds, sigmas], dim=1)
+
+    res_model = HeteroscedasticNN(input_dim=2, hidden_dim=8, output_dim=2)
+    res_model.load_state_dict(torch.load('collision_model_heteroscedastic.pt'))
+    res_model.to('cpu')
+    res_model.eval()
                 
     global C5
     global C6
@@ -250,7 +284,7 @@ def distance_to_wall(t, dist, B, f, mass, C, D):
     return dP(t, B, f, mass, C, D) - dist
 
 
-def corner_collision(A, pos, vel, t, C, D, v_norm, dir, dPdt,B,f,mass, vt, res): #res: e_i, e_r, e_f, std, normal then tangent (7,)
+def corner_collision(A, pos, vel, t, C, D, v_norm, dir, dPdt,B,f,mass, vt):
     a = vel[0]**2 + vel[1]**2
     b = 2*pos[0]*vel[0] + 2*pos[1]*vel[1]-2*A[0]*vel[0]-2*A[1]*vel[1]
     c = pos[0]**2+pos[1]**2+A[0]**2+A[1]**2-puck_radius**2-2*A[0]*pos[0]-2*A[1]*pos[1]
@@ -305,12 +339,16 @@ def corner_collision(A, pos, vel, t, C, D, v_norm, dir, dPdt,B,f,mass, vt, res):
     tangent = np.array([n[1], -n[0]])
     vel_r = np.array(new_vel)
 
-    #res: n_i, n_r, n_f, t_i, t_r, t_f, n_std, t_std, wall then mallet (8,)
+    v_in = np.linalg.norm(vel_r)
+    n_vel = np.dot(vel_r, n)
+    t_vel = np.dot(vel_r, tangent)
+    angle_in = np.degrees(np.arctan(abs(t_vel/n_vel)))
 
-    normal_res = np.clip(res[2]+(1-res[2]/res[0])*2*res[0]/(1+np.exp(res[1]*np.square(np.dot(vel_r, n)))) + np.random.normal(0,res[6]), 0.2, 1)
-    tangent_res = np.clip(res[5]+(1-res[5]/res[3])*2*res[3]/(1+np.exp(res[4]*np.square(np.dot(vel_r, tangent)))) + np.random.normal(0,res[7]), 0.2, 1)
-    vel_r = np.array([-normal_res*np.dot(vel_r, n), tangent_res*np.dot(vel_r, tangent)])
-    new_vel = n * vel_r[0] + tangent * vel_r[1]
+    col_out = res_model(torch.FloatTensor(np.array([angle_in, v_in]))).numpy()
+    angle_out = np.clip(np.random.normal(col_out[0], col_out[2]), -89, 89)
+    v_out = max(np.random.normal(col_out[1], col_out[3]), 0.001)    
+
+    new_vel = n * v_out * np.cos(angle_out) * (-n_vel / abs(n_vel)) + tangent * v_out * np.sin(angle_out) * (t_vel / abs(t_vel))
 
     return new_pos, new_vel, True, t - thit_min
 
@@ -405,7 +443,7 @@ def check_in_goal_corner_bounce(vel, pos, v_norm):
     return A, bounces
 
 
-def puck_mallet_collision(mask, pos, vel, dir, dt_col, t_init, C, D, Bm, fm, massm, resm, vpf, x_m): #res: e_i, e_r, e_f, std, normal then tangent (n, 8)
+def puck_mallet_collision(mask, pos, vel, dir, dt_col, t_init, C, D, Bm, fm, massm, vpf, x_m):
 
     dt_dynamic = np.empty_like(dt_col)
     dt_sum = np.zeros_like(dt_col)
@@ -551,13 +589,17 @@ def puck_mallet_collision(mask, pos, vel, dir, dt_col, t_init, C, D, Bm, fm, mas
             tangent = np.stack([-normal[:,1], normal[:,0]], axis=1)
             collision_indices_m1 = np.where(collision_unknown)[0][colided_mask_m1]
 
-            #res: e_i, e_r, e_f, std, normal then tangent (8,)
-            #np.clip(res[2]+(1-res[2]/res[0])*2*res[0]/(1+np.exp(res[1]*np.square(np.dot(vel_r, n)))) + np.random.normal(0,res[3]), 0.2, 1)
-            res_mask = resm[collision_indices_m1]
-            normal_res = np.clip(res_mask[:,2] + (1-res_mask[:,2]/res_mask[:,0])*2*res_mask[:,0]/(1+np.exp(res_mask[:,1]*np.square(np.sum(v_rel*normal, axis=-1)))) + np.random.normal(0,res_mask[:,6]), 0.2,1)
-            tangent_res = np.clip(res_mask[:,5] + (1-res_mask[:,5]/res_mask[:,3])*2*res_mask[:,3]/(1+np.exp(res_mask[:,4]*np.square(np.sum(v_rel*tangent, axis=-1)))) + np.random.normal(0,res_mask[:,7]), 0.2,1)
-            v_rel_col = tangent * np.tile((tangent_res * np.sum(v_rel*tangent, axis=-1))[:,np.newaxis], (1,2)) -\
-                  normal * np.tile((normal_res * np.sum(v_rel * normal, axis=-1))[:,np.newaxis], (1,2))
+            v_in = np.linalg.norm(v_rel, axis=1)
+            n_vel = np.sum(v_rel*normal, axis=-1)
+            t_vel = np.sum(v_rel*tangent, axis=-1)
+            angle_in = np.degrees(np.arctan(np.abs(t_vel/n_vel)))
+
+            col_out = res_model(torch.FloatTensor(np.stack((angle_in, v_in), axis=1))).numpy()
+            angle_out = np.clip(np.random.normal(col_out[:,0], col_out[:,2]), -89, 89)
+            v_out = np.maximum(np.random.normal(col_out[:,1], col_out[:,3]), 0.001)    
+
+            v_rel_col = normal * v_out * np.cos(angle_out) * (-n_vel / abs(n_vel)) + tangent * v_out * np.sin(angle_out) * (t_vel / abs(t_vel))
+
             v_p_col = v_rel_col + v_m[:,0,:][colided_mask_m1]
             new_pos[collision_indices_m1] = x_p[colided_mask_m1]
             new_vel[collision_indices_m1] = v_p_col
@@ -578,14 +620,17 @@ def puck_mallet_collision(mask, pos, vel, dir, dt_col, t_init, C, D, Bm, fm, mas
             tangent = np.stack([-normal[:,1], normal[:,0]], axis=1)
             collision_indices_m2 = np.where(collision_unknown)[0][colided_mask_m2]
 
+            v_in = np.linalg.norm(v_rel, axis=1)
+            n_vel = np.sum(v_rel*normal, axis=-1)
+            t_vel = np.sum(v_rel*tangent, axis=-1)
+            angle_in = np.degrees(np.arctan(np.abs(t_vel/n_vel)))
 
-            #res: e_i, e_r, e_f, std, normal then tangent (8,)
-            #np.clip(res[2]+(1-res[2]/res[0])*2*res[0]/(1+np.exp(res[1]*np.square(np.dot(vel_r, n)))) + np.random.normal(0,res[3]), 0.2, 1)
-            res_mask = resm[collision_indices_m2]
-            normal_res = np.clip(res_mask[:,2] + (1-res_mask[:,2]/res_mask[:,0])*2*res_mask[:,0]/(1+np.exp(res_mask[:,1]*np.square(np.sum(v_rel*normal, axis=-1)))) + np.random.normal(0,res_mask[:,6]), 0.2,1)
-            tangent_res = np.clip(res_mask[:,5] + (1-res_mask[:,5]/res_mask[:,3])*2*res_mask[:,3]/(1+np.exp(res_mask[:,4]*np.square(np.sum(v_rel*tangent, axis=-1)))) + np.random.normal(0,res_mask[:,7]), 0.2,1)
-            v_rel_col = tangent * np.tile((tangent_res * np.sum(v_rel*tangent, axis=-1))[:,np.newaxis], (1,2)) -\
-                  normal * np.tile((normal_res * np.sum(v_rel * normal, axis=-1))[:,np.newaxis], (1,2))
+
+            col_out = res_model.predict(torch.FloatTensor(np.stack((angle_in, v_in), axis=1))).numpy()
+            angle_out = np.clip(np.random.normal(col_out[:,0], col_out[:,2]), -89, 89)
+            v_out = np.maximum(np.random.normal(col_out[:,1], col_out[:,3]), 0.001)    
+
+            v_rel_col = normal * v_out * np.cos(angle_out) * (-n_vel / abs(n_vel)) + tangent * v_out * np.sin(angle_out) * (t_vel / abs(t_vel))
 
             v_p_col = v_rel_col + v_m[:,1,:][colided_mask_m2]
             new_pos[collision_indices_m2] = x_p[colided_mask_m2]
@@ -738,8 +783,6 @@ def update_puck(t, mask, t_init, no_M = False, noM_pos = None, noM_vel = None, i
     Bm = drag[mask]
     fm = friction[mask]
     massm = mass[mask]
-    resm_wall = res[mask][:, :8]
-    resm_mallet = res[mask][:,8:]
     bounds_puckm = bounds_puck[mask]
  
     C = getC(v_norm, Bm, fm)
@@ -759,7 +802,7 @@ def update_puck(t, mask, t_init, no_M = False, noM_pos = None, noM_vel = None, i
                 new_pos[idx], new_vel[idx], recurr_mask_m[idx], recurr_time_m[idx] = corner_collision(point_A, pos[idx], vel[idx],\
                                                                                                 t[idx], C[idx], D[idx], v_norm[idx],\
                                                                                                 dir[idx], dPdt[idx],Bm[idx],fm[idx],\
-                                                                                                    massm[idx], vt[idx], resm_wall[idx])
+                                                                                                    massm[idx], vt[idx])
                 v_norm_mask[idx] = False
 
 
@@ -837,7 +880,6 @@ def update_puck(t, mask, t_init, no_M = False, noM_pos = None, noM_vel = None, i
         Dw = D[hit_wall_mask]
         tw = t[hit_wall_mask]
         dirw = dir[hit_wall_mask]
-        resw = resm_wall[hit_wall_mask]
         root = chandrupatla(distance_to_wall, np.zeros_like(tw), tw, args=(wall_dist, \
                                 Bmw, fmw, massmw, Cw, Dw))
 
@@ -846,11 +888,20 @@ def update_puck(t, mask, t_init, no_M = False, noM_pos = None, noM_vel = None, i
                                                     massmw, Cw, Dw)[:, np.newaxis], (1, 2))
         
         new_vel_bc = np.tile(velocity(root, Bmw, fmw, massmw, Cw)[:, np.newaxis], (1, 2)) * dirw
-        normal_res = np.clip(resw[:,2] + (1-resw[:,2]/resw[:,0])*2*resw[:,0]/(1+np.exp(resw[:,1]*np.square(np.where(wall==0,new_vel_bc[:,0],new_vel_bc[:,1])))) + np.random.normal(0,resw[:,6]), 0.2,1)
-        tangent_res = np.clip(resw[:,5] + (1-resw[:,5]/resw[:,3])*2*resw[:,3]/(1+np.exp(resw[:,4]*np.square(np.where(wall==0,new_vel_bc[:,1],new_vel_bc[:,0])))) + np.random.normal(0,resw[:,7]), 0.2,1)
         
-        new_vel_bc[:,0] = np.where(wall == 0, -normal_res * new_vel_bc[:,0], tangent_res * new_vel_bc[:,0])
-        new_vel_bc[:,1] = np.where(wall == 0, tangent_res * new_vel_bc[:,1], - normal_res * new_vel_bc[:,1])
+        v_in = np.linalg.norm(new_vel_bc, axis=1)
+        normal = np.where(wall == 0, np.array([1,0]), np.array([0,1]))
+        tangent = np.where(wall == 0, np.array([0,1]), np.array([1,0]))
+        n_vel = np.where(wall == 0, new_vel_bc[:,0], new_vel_bc[:,1])
+        t_vel = np.where(wall == 0, new_vel_bc[:,1], new_vel_bc[:,0])
+        angle_in = np.degrees(np.arctan(np.abs(t_vel/n_vel)))
+
+        col_out = res_model(torch.FloatTensor(np.stack((angle_in, v_in), axis=1))).numpy()
+        angle_out = np.clip(np.random.normal(col_out[:,0], col_out[:,2]), -89, 89)
+        v_out = np.maximum(np.random.normal(col_out[:,1], col_out[:,3]), 0.001)    
+
+        new_vel_bc = normal * v_out * np.cos(angle_out) * (-n_vel / abs(n_vel)) + tangent * v_out * np.sin(angle_out) * (t_vel / abs(t_vel))
+        
         new_vel[hit_wall_mask] = new_vel_bc 
 
         recurr_mask_m[hit_wall_mask] = True
@@ -866,7 +917,7 @@ def update_puck(t, mask, t_init, no_M = False, noM_pos = None, noM_vel = None, i
         for idx in corner_hit_indicies:
             new_pos[idx], new_vel[idx], recurr_mask_m[idx], recurr_time_m[idx] = corner_collision(point_A[i], pos[idx], vel[idx],\
                                                                                                 t[idx], C[idx], D[idx], v_norm[idx],\
-                                                                                                dir[idx], dPdt[idx],Bm[idx],fm[idx],massm[idx], vt[idx], resm_wall[idx])
+                                                                                                dir[idx], dPdt[idx],Bm[idx],fm[idx],massm[idx], vt[idx])
             i += 1
 
     no_col_mask = ~hit_wall_mask & ~corner_hit_mask & v_norm_mask
@@ -889,7 +940,7 @@ def update_puck(t, mask, t_init, no_M = False, noM_pos = None, noM_vel = None, i
         #print("A")
         #print(len(np.where(mask)[0]))
         pm_pos, pm_vel, pm_time, pm_mask = puck_mallet_collision(mask, pos, vel, dir, dt_col, t_init,\
-                                                                C, D, Bm, fm, massm, resm_mallet, vpf, x_m)
+                                                                C, D, Bm, fm, massm, vpf, x_m)
 
 
         recurr_mask_m = np.logical_or(recurr_mask_m, pm_mask)
@@ -1825,7 +1876,7 @@ def display_state(index, puck_pos_noM=None):
 def get_mallet_bounds():
     return bounds_mallet
 
-def reset_sim(index = None, col_vars=None, ab_vars=None):#, left_scored= None):
+def reset_sim(index = None, ab_vars=None):#, left_scored= None):
     if index is None:
         index = np.array([i for i in range(game_number)])
     #if left_scored is None:
@@ -1852,8 +1903,6 @@ def reset_sim(index = None, col_vars=None, ab_vars=None):#, left_scored= None):
 
     puck_vel[index,:] = np.array([0.0,0.0])
     puck_pos[index,:] = puck_init[index,:]
-
-    res[index,:] = col_vars
 
     #(game, player, x/y)
     C5_idx = np.empty((len(index),2,2))

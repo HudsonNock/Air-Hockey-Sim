@@ -344,7 +344,8 @@ def corner_collision(A, pos, vel, t, C, D, v_norm, dir, dPdt,B,f,mass, vt):
     t_vel = np.dot(vel_r, tangent)
     angle_in = np.degrees(np.arctan(abs(t_vel/n_vel)))
 
-    col_out = res_model(torch.FloatTensor(np.array([angle_in, v_in]))).numpy()
+    with torch.no_grad():
+        col_out = res_model(torch.FloatTensor(np.array([angle_in, v_in]))).numpy()
     angle_out = np.clip(np.random.normal(col_out[0], col_out[2]), -89, 89)
     v_out = max(np.random.normal(col_out[1], col_out[3]), 0.001)    
 
@@ -594,7 +595,8 @@ def puck_mallet_collision(mask, pos, vel, dir, dt_col, t_init, C, D, Bm, fm, mas
             t_vel = np.sum(v_rel*tangent, axis=-1)
             angle_in = np.degrees(np.arctan(np.abs(t_vel/n_vel)))
 
-            col_out = res_model(torch.FloatTensor(np.stack((angle_in, v_in), axis=1))).numpy()
+            with torch.no_grad():
+                col_out = res_model(torch.FloatTensor(np.stack((angle_in, v_in), axis=1))).numpy()
             angle_out = np.clip(np.random.normal(col_out[:,0], col_out[:,2]), -89, 89)
             v_out = np.maximum(np.random.normal(col_out[:,1], col_out[:,3]), 0.001)    
 
@@ -625,8 +627,8 @@ def puck_mallet_collision(mask, pos, vel, dir, dt_col, t_init, C, D, Bm, fm, mas
             t_vel = np.sum(v_rel*tangent, axis=-1)
             angle_in = np.degrees(np.arctan(np.abs(t_vel/n_vel)))
 
-
-            col_out = res_model.predict(torch.FloatTensor(np.stack((angle_in, v_in), axis=1))).numpy()
+            with torch.no_grad():
+                col_out = res_model.predict(torch.FloatTensor(np.stack((angle_in, v_in), axis=1))).numpy()
             angle_out = np.clip(np.random.normal(col_out[:,0], col_out[:,2]), -89, 89)
             v_out = np.maximum(np.random.normal(col_out[:,1], col_out[:,3]), 0.001)    
 
@@ -896,7 +898,8 @@ def update_puck(t, mask, t_init, no_M = False, noM_pos = None, noM_vel = None, i
         t_vel = np.where(wall == 0, new_vel_bc[:,1], new_vel_bc[:,0])
         angle_in = np.degrees(np.arctan(np.abs(t_vel/n_vel)))
 
-        col_out = res_model(torch.FloatTensor(np.stack((angle_in, v_in), axis=1))).numpy()
+        with torch.no_grad():
+            col_out = res_model(torch.FloatTensor(np.stack((angle_in, v_in), axis=1))).numpy()
         angle_out = np.clip(np.random.normal(col_out[:,0], col_out[:,2]), -89, 89)
         v_out = np.maximum(np.random.normal(col_out[:,1], col_out[:,3]), 0.001)    
 

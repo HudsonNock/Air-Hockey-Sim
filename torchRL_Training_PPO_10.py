@@ -32,7 +32,7 @@ obs_dim = 38 #[puck_pos, opp_mallet_pos] #guess mean low stdl
 
 mallet_r = 0.1011 / 2
 puck_r = 0.0629 / 2
-pullyR = 0.3573695
+pullyR = 0.03573695
 
 #col: n_f + (1-n_f/n_0) * 2/(1+e^(n_r x^2)) n_0
 
@@ -262,7 +262,7 @@ if load_filepath is not None:
 
 envs = 2048 #2048
 if not train:
-    envs = 1
+    envs = 2
 
 # Generate 2D low-frequency Perlin noise
 mallet_init = np.array([[0.25, 0.5], [0,0]])
@@ -324,6 +324,7 @@ ab_vars *= np.random.uniform(speed_var[0], speed_var[1], size=(envs, 2, 1))
 
 if not train:
     ab_vars[0,0,:] = np.array([7.474e-06, 6.721e-03, 6.658e-02, -1.607e-06, -2.731e-03, 3.610e-03])
+    ab_vars[0,1,:] = np.array([7.474e-06, 6.721e-03, 6.658e-02, -1.607e-06, -2.731e-03, 3.610e-03])
     #ab_vars[0,0,:] = np.array([7.629e-06, 6.617e-03, 7e-02, -7.445e-06, -2.661e-03, 5.277e-03])
 
 ab_obs = np.zeros((2*envs, 6))
@@ -522,7 +523,8 @@ while True:
 
         if large_beam_interference.any():
             past_puck_data = camera_buffer.get([0])[:envs,:2] # player, x/y (envs,2)
-            miss_mask = np.random.random((envs)) < percent_miss[0] * puck_pos[:,0] + percent_miss[1] #a*x+b
+            miss_mask = np.logical_or(np.random.random((envs)) < percent_miss[0] * puck_pos[:,0] + percent_miss[1],\
+                                       np.logical_and(puck_pos[:,0] - puck_r > beam_coeffs[0,0] * mallet_pos[:,0,0] + beam_coeffs[0,1], puck_pos[:,0] + puck_r < beam_coeffs[1,0] * mallet_pos[:,0,0] + beam_coeffs[1,1]))
 
             puck_pos = np.concatenate([puck_pos + puck_noise + puck_wgn_noise, bounds - puck_pos],axis=0)
             puck_pos[:envs][np.logical_and(large_beam_interference, miss_mask)] = past_puck_data[np.logical_and(large_beam_interference, miss_mask)]
@@ -842,7 +844,8 @@ if train:
 
                     if large_beam_interference.any():
                         past_puck_data = camera_buffer.get([0])[:envs,:2] # player, x/y (envs,2)
-                        miss_mask = np.random.random((envs)) < percent_miss[0] * puck_pos[:,0] + percent_miss[1] #a*x+b
+                        miss_mask = np.logical_or(np.random.random((envs)) < percent_miss[0] * puck_pos[:,0] + percent_miss[1],\
+                                                  np.logical_and(puck_pos[:,0] - puck_r > beam_coeffs[0,0] * mallet_pos[:,0,0] + beam_coeffs[0,1], puck_pos[:,0] + puck_r < beam_coeffs[1,0] * mallet_pos[:,0,0] + beam_coeffs[1,1]))
 
                         puck_pos = np.concatenate([puck_pos + puck_noise + puck_wgn_noise, bounds - puck_pos],axis=0)
                         puck_pos[:envs][np.logical_and(large_beam_interference, miss_mask)] = past_puck_data[np.logical_and(large_beam_interference, miss_mask)]
@@ -1345,7 +1348,8 @@ for timestep in range(100000):
 
             if large_beam_interference.any():
                 past_puck_data = camera_buffer.get([0])[:envs,:2] # player, x/y (envs,2)
-                miss_mask = np.random.random((envs)) < percent_miss[0] * puck_pos[:,0] + percent_miss[1] #a*x+b
+                miss_mask = np.logical_or(np.random.random((envs)) < percent_miss[0] * puck_pos[:,0] + percent_miss[1],\
+                                          np.logical_and(puck_pos[:,0] - puck_r > beam_coeffs[0,0] * mallet_pos[:,0,0] + beam_coeffs[0,1], puck_pos[:,0] + puck_r < beam_coeffs[1,0] * mallet_pos[:,0,0] + beam_coeffs[1,1]))
 
                 puck_pos = np.concatenate([puck_pos + puck_noise + puck_wgn_noise, bounds - puck_pos],axis=0)
                 puck_pos[:envs][np.logical_and(large_beam_interference, miss_mask)] = past_puck_data[np.logical_and(large_beam_interference, miss_mask)]
@@ -1407,6 +1411,9 @@ for timestep in range(100000):
         elif next_action < next_img and next_action < next_mallet:
             mallet_pos, _, puck_pos, puck_vel, cross_left, cross_right = sim.step(next_action)
 
+            if np.linalg.norm(puck_vel, axis=-1)[0] > 7.0:
+                print(np.linalg.norm(puck_vel))
+
             env_err = sim.check_state()
             entered_left_goal_mask, entered_right_goal_mask = sim.check_goal()
             if len(env_err) > 0:
@@ -1463,7 +1470,7 @@ for timestep in range(100000):
     #print(obs[0,28:32])
     #print(apply_symmetry(torch.tensor(past_obs[0])[None, :]))
             
-    sim.display_state(0)
+    sim.display_state(1)
 
     #print("---")
     #print(past_obs[0])

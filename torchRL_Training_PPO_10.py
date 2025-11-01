@@ -58,7 +58,7 @@ V_std_y = 0.3
 # (7.629e-06, 6.617e-03, 7e-02, -7.445e-06, -2.661e-03, 5.277e-03
 
 ab_ranges = np.array([
-        [6.35e-6, 8.5e-6],  # a1
+        [6.9e-6, 8.5e-6],  # a1
         [5.3e-3, 8.55e-3],  # a2
         [5.25e-2, 8.15e-2],  # a3
         [-8.19e-6, -6.01e-6], # b1
@@ -317,6 +317,8 @@ ab_vars = np.random.uniform(
         high=ab_ranges[:, 1].reshape(1, 1, 6),   # Shape: (1, 1, 6)
         size=(envs, 2, 6)                     # Output shape
     )
+
+ab_vars[:,:,3:] = ab_vars[:,:,3:] / np.abs(ab_vars[:,:,3:]) * np.minimum(np.abs(ab_vars[:,:,3:]), np.abs(ab_vars[:,:,:3])*9.5/10)
 
 ab_vars *= np.random.uniform(speed_var[0], speed_var[1], size=(envs, 2, 1))
 
@@ -1028,6 +1030,8 @@ if train:
                         high=ab_ranges[:, 1].reshape(1, 1, 6),   # Shape: (1, 1, 5)
                         size=(num_resets, 2, 6)                     # Output shape
                     )
+
+                ab_vars[:,:,3:] = ab_vars[:,:,3:] / np.abs(ab_vars[:,:,3:]) * np.minimum(np.abs(ab_vars[:,:,3:]), np.abs(ab_vars[:,:,:3])*9.5/10)
 
                 ab_vars *= np.random.uniform(speed_var[0], speed_var[1], size=(num_resets, 2, 1))
 

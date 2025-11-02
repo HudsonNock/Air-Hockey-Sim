@@ -15,8 +15,8 @@ import torch.nn.functional as F
 # Initialize pygame
 print("STARTING")
 
-height = 1.993
-width = 0.992
+height = 0.992
+width = 1.993
 
 bounds = np.array([width, height])
 plr = 500
@@ -34,7 +34,7 @@ green = (0, 100, 0)
 blue = (0,0,255)
 
 #fourcc = cv2.VideoWriter_fourcc(*'MJPG')
-#out = cv2.VideoWriter("183_vid_def.avi", fourcc, 60.0, (screen_width, screen_height))
+#out = cv2.VideoWriter("Model_play_new_env.avi", fourcc, 60.0, (screen_width, screen_height))
 #frame_count = 0
 
 def initalize(envs, mallet_r=0.05, puck_r=0.05, goal_w=0.35, V_max=24, pully_radius=0.035306, ab_vars=None, puck_inits=None):
@@ -65,6 +65,7 @@ def initalize(envs, mallet_r=0.05, puck_r=0.05, goal_w=0.35, V_max=24, pully_rad
     global sink_bounds
     global sinks
     global res_model
+    global mallet_res_model
 
     time = 0
 
@@ -147,6 +148,11 @@ def initalize(envs, mallet_r=0.05, puck_r=0.05, goal_w=0.35, V_max=24, pully_rad
     res_model.load_state_dict(torch.load('collision_model_heteroscedastic.pt'))
     res_model.to('cpu')
     res_model.eval()
+
+    mallet_res_model = HeteroscedasticNN(input_dim=2, hidden_dim=8, output_dim=2)
+    mallet_res_model.load_state_dict(torch.load('mallet_collision_model_heteroscedastic.pt'))
+    mallet_res_model.to('cpu')
+    mallet_res_model.eval()
                 
     global C5
     global C6
@@ -345,11 +351,11 @@ def corner_collision(A, pos, vel, t, C, D, v_norm, dir, dPdt,B,f,mass, vt):
     angle_in = np.degrees(np.arctan(abs(t_vel/n_vel)))
 
     with torch.no_grad():
-        col_out = res_model(torch.FloatTensor(np.array([angle_in, v_in]))).numpy()
+        col_out = res_model(torch.FloatTensor(np.array([angle_in, v_in])[np.newaxis,:])).numpy()[0]
     angle_out = np.clip(np.random.normal(col_out[0], col_out[2]), -89, 89)
     v_out = max(np.random.normal(col_out[1], col_out[3]), 0.001)    
 
-    new_vel = n * v_out * np.cos(angle_out) * (-n_vel / abs(n_vel)) + tangent * v_out * np.sin(angle_out) * (t_vel / abs(t_vel))
+    new_vel = n * v_out * np.cos(angle_out * np.pi/180.0) * (-n_vel / abs(n_vel)) + tangent * v_out * np.sin(angle_out * np.pi/180.0) * (t_vel / abs(t_vel))
 
     return new_pos, new_vel, True, t - thit_min
 
@@ -596,11 +602,11 @@ def puck_mallet_collision(mask, pos, vel, dir, dt_col, t_init, C, D, Bm, fm, mas
             angle_in = np.degrees(np.arctan(np.abs(t_vel/n_vel)))
 
             with torch.no_grad():
-                col_out = res_model(torch.FloatTensor(np.stack((angle_in, v_in), axis=1))).numpy()
+                col_out = mallet_res_model(torch.FloatTensor(np.stack((angle_in, v_in), axis=1))).numpy()
             angle_out = np.clip(np.random.normal(col_out[:,0], col_out[:,2]), -89, 89)
             v_out = np.maximum(np.random.normal(col_out[:,1], col_out[:,3]), 0.001)    
 
-            v_rel_col = normal * v_out * np.cos(angle_out) * (-n_vel / abs(n_vel)) + tangent * v_out * np.sin(angle_out) * (t_vel / abs(t_vel))
+            v_rel_col = normal * (v_out * np.cos(angle_out * np.pi/180.0) * (-n_vel / abs(n_vel)))[:,None] + tangent * (v_out * np.sin(angle_out * np.pi/180.0) * (t_vel / abs(t_vel)))[:,None]
 
             v_p_col = v_rel_col + v_m[:,0,:][colided_mask_m1]
             new_pos[collision_indices_m1] = x_p[colided_mask_m1]
@@ -628,11 +634,11 @@ def puck_mallet_collision(mask, pos, vel, dir, dt_col, t_init, C, D, Bm, fm, mas
             angle_in = np.degrees(np.arctan(np.abs(t_vel/n_vel)))
 
             with torch.no_grad():
-                col_out = res_model.predict(torch.FloatTensor(np.stack((angle_in, v_in), axis=1))).numpy()
+                col_out = mallet_res_model(torch.FloatTensor(np.stack((angle_in, v_in), axis=1))).numpy()
             angle_out = np.clip(np.random.normal(col_out[:,0], col_out[:,2]), -89, 89)
             v_out = np.maximum(np.random.normal(col_out[:,1], col_out[:,3]), 0.001)    
 
-            v_rel_col = normal * v_out * np.cos(angle_out) * (-n_vel / abs(n_vel)) + tangent * v_out * np.sin(angle_out) * (t_vel / abs(t_vel))
+            v_rel_col = normal * (v_out * np.cos(angle_out * np.pi/180.0) * (-n_vel / abs(n_vel)))[:,None] + tangent * (v_out * np.sin(angle_out * np.pi/180.0) * (t_vel / abs(t_vel)))[:,None]
 
             v_p_col = v_rel_col + v_m[:,1,:][colided_mask_m2]
             new_pos[collision_indices_m2] = x_p[colided_mask_m2]
@@ -892,8 +898,11 @@ def update_puck(t, mask, t_init, no_M = False, noM_pos = None, noM_vel = None, i
         new_vel_bc = np.tile(velocity(root, Bmw, fmw, massmw, Cw)[:, np.newaxis], (1, 2)) * dirw
         
         v_in = np.linalg.norm(new_vel_bc, axis=1)
-        normal = np.where(wall == 0, np.array([1,0]), np.array([0,1]))
-        tangent = np.where(wall == 0, np.array([0,1]), np.array([1,0]))
+
+        wall_mask = wall == 0
+        normal = np.where(wall_mask[:,np.newaxis], np.full((wall.shape[0],2), np.array([1,0])), np.full((wall.shape[0],2), np.array([0,1])))
+        tangent = np.stack((normal[:,1], normal[:,0]), axis=1)
+
         n_vel = np.where(wall == 0, new_vel_bc[:,0], new_vel_bc[:,1])
         t_vel = np.where(wall == 0, new_vel_bc[:,1], new_vel_bc[:,0])
         angle_in = np.degrees(np.arctan(np.abs(t_vel/n_vel)))
@@ -903,7 +912,7 @@ def update_puck(t, mask, t_init, no_M = False, noM_pos = None, noM_vel = None, i
         angle_out = np.clip(np.random.normal(col_out[:,0], col_out[:,2]), -89, 89)
         v_out = np.maximum(np.random.normal(col_out[:,1], col_out[:,3]), 0.001)    
 
-        new_vel_bc = normal * v_out * np.cos(angle_out) * (-n_vel / abs(n_vel)) + tangent * v_out * np.sin(angle_out) * (t_vel / abs(t_vel))
+        new_vel_bc = normal * (v_out * np.cos(angle_out * np.pi / 180.0) * (-n_vel / abs(n_vel)))[:,None] + tangent * (v_out * np.sin(angle_out * np.pi / 180.0) * (t_vel / abs(t_vel)))[:,None]
         
         new_vel[hit_wall_mask] = new_vel_bc 
 

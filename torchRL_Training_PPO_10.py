@@ -20,9 +20,9 @@ import copy
 import random
 import torch.nn.functional as F
 
-load_filepath = "checkpoints/model_184.pth"
+load_filepath = "checkpoints/model_188.pth"
 second_actor_filepath = "yes"
-save_filepath = "checkpoints/model_185.pth" #Best is 12, 15, 22, 44, 76, 103, 121, 134, 142, 160, 165, 178
+save_filepath = "checkpoints/model_190.pth" #Best is 12, 15, 22, 44, 76, 103, 121, 134, 142, 160, 165, 178
 train = True
 # Simulation parameters
 obs_dim = 38 #[puck_pos, opp_mallet_pos] #guess mean low stdl
@@ -49,11 +49,11 @@ beam_width = 0.05085
 beam_thickness = 0.0127
 beam_height = 0.04795 #from floor roof of beam
 
-mallet_std = 0.001
-mallet_vel_std = 0.02
+mallet_std = 0.0005
+mallet_vel_std = 0.07
 
-V_std_x = 0.3
-V_std_y = 0.3
+V_std_x = 0.05
+V_std_y = 0.05
 
 # (7.629e-06, 6.617e-03, 7e-02, -7.445e-06, -2.661e-03, 5.277e-03
 
@@ -83,14 +83,14 @@ goal_width = 0.254
 entropy_coeff = 0.01
 epsilon = 0.05
 gamma = 0.997
-lr_policy = 5e-6 #1e-5
-lr_value = 5e-6
+lr_policy = 5e-5 #1e-5
+lr_value = 5e-5
 #lr = 1e-4
 batch_sizee = 1024
 num_epochs = 1
 lmbda = 0.7
 sim_steps = 1000
-lr_defender = 5e-5
+lr_defender = 1e-4
 q_epsilon = 0.03
 #target_kl = 0.02
 
@@ -254,15 +254,15 @@ if load_filepath is not None:
     checkpoint = torch.load(load_filepath, map_location='cuda')
     policy_module.load_state_dict(checkpoint['policy_state_dict'])
     value_module.load_state_dict(checkpoint['value_state_dict'])
-    #q_module.load_state_dict(checkpoint['q_state_dict'])
-    #optimizer_policy.load_state_dict(checkpoint['policy_optim_state_dict'])
-    #optimizer_value.load_state_dict(checkpoint['value_optim_state_dict'])
-    #optimizer_defender.load_state_dict(checkpoint['q_optim_state_dict'])
+    q_module.load_state_dict(checkpoint['q_state_dict'])
+    optimizer_policy.load_state_dict(checkpoint['policy_optim_state_dict'])
+    optimizer_value.load_state_dict(checkpoint['value_optim_state_dict'])
+    optimizer_defender.load_state_dict(checkpoint['q_optim_state_dict'])
 
 
 envs = 2048 #2048
 if not train:
-    envs = 2
+    envs = 4
 
 # Generate 2D low-frequency Perlin noise
 mallet_init = np.array([[0.25, 0.5], [0,0]])
@@ -508,7 +508,7 @@ while True:
 
     if next_img < next_mallet and next_img < next_action:
         #mallet_pos (mallet, op_mallet)
-        mallet_pos, _, puck_pos, _, cross_left, cross_right = sim.step(next_img)
+        mallet_pos, _, puck_pos, _, _, cross_right = sim.step(next_img)
         for i in range(2):
             noise_idx = (puck_pos*100).astype(np.int16) + noise_seeds[:,i,:]
             noise_idx[:,0] = np.clip(noise_idx[:,0], 0, 1999)
@@ -550,7 +550,7 @@ while True:
 
         inference_img.put(np.logical_not(inference_img.get(0)))
     elif next_mallet < next_img and next_mallet < next_action:
-        mallet_pos, mallet_vel, _, _, cross_left, cross_right = sim.step(next_mallet)
+        mallet_pos, mallet_vel, _, _, _, cross_right = sim.step(next_mallet)
 
         #(2*envs, 2)
         past_obs[:,20:22] = np.concatenate([mallet_pos[:,0,:] + np.random.normal(0, mallet_std, (envs,2)), bounds - mallet_pos[:,1,:] + np.random.normal(0, mallet_std, (envs,2))], axis=0)
@@ -562,7 +562,7 @@ while True:
         mallet_time.subtract(next_mallet)
 
     elif next_action < next_img and next_action < next_mallet:
-        _, _, _, _, cross_left, cross_right = sim.step(next_action)
+        _, _, _, _, _, cross_right = sim.step(next_action)
 
         #[puck_pos, opp_mallet_pos] #guess mean low std
         #[mallet_pos, mallet_vel, past mallet_pos, past_mallet_vel, past action (x0, V)]
@@ -720,7 +720,7 @@ if train:
                     #tensor_obs = TensorDict({"observation": torch.tensor(past_obs[envs+int(envs/2):], dtype=torch.float32)}).to('cuda')
 
                     if left_puck.any():
-                        if timestep % 5 == 0:
+                        if timestep % 3 == 0:
                             qrewards[:] = 0
                             qacting[:] = left_puck
                             qpast_obs[:] = past_obs[envs+int(envs/2):]
@@ -808,7 +808,7 @@ if train:
 
                 if next_img < next_mallet and next_img < next_action:
                     #mallet_pos (mallet, op_mallet)
-                    mallet_pos, _, puck_pos, _, cross_left, cross_right = sim.step(next_img)
+                    mallet_pos, _, puck_pos, _, score_avg, cross_right = sim.step(next_img)
 
                     env_err = sim.check_state()
                     entered_left_goal_mask, entered_right_goal_mask = sim.check_goal()
@@ -823,11 +823,11 @@ if train:
                     terminal_rewards[:envs][entered_left_goal_mask] -= 100
                     err_dones[entered_left_goal_mask | entered_right_goal_mask] = True
 
-                    terminal_rewards[:envs] += np.where(cross_right > 0, 20+np.sqrt(np.maximum(cross_right,0))/2, 0)
-                    terminal_rewards[envs:] += np.where(cross_right > 0, -20.0, 0)
+                    terminal_rewards[:envs] += np.where(cross_right != -1, score_avg*(20+np.sqrt(np.maximum(cross_right,0))/2), 0)
+                    terminal_rewards[envs:] += np.where(cross_right != -1, -20.0*score_avg, 0)
 
                     for i in range(4):
-                        shooting[i,0] += np.sum(cross_right[int(envs*i/4):int(envs*(i+1)/4)] > 0)
+                        shooting[i,0] += np.sum(score_avg[int(envs*i/4):int(envs*(i+1)/4)])
                         shooting[i,1] += np.sum(cross_right[int(envs*i/4):int(envs*(i+1)/4)] != -1)
 
                     for i in range(2):
@@ -869,7 +869,7 @@ if train:
 
                     inference_img.put(np.logical_not(inference_img.get(0)))
                 elif next_mallet < next_img and next_mallet < next_action:
-                    mallet_pos, mallet_vel, _, _, cross_left, cross_right = sim.step(next_mallet)
+                    mallet_pos, mallet_vel, _, _, score_avg, cross_right = sim.step(next_mallet)
 
                     env_err = sim.check_state()
                     entered_left_goal_mask, entered_right_goal_mask = sim.check_goal()
@@ -884,11 +884,11 @@ if train:
                     terminal_rewards[:envs][entered_left_goal_mask] -= 100
                     err_dones[entered_left_goal_mask | entered_right_goal_mask] = True
 
-                    terminal_rewards[:envs] += np.where(cross_right > 0, 20+np.sqrt(np.maximum(cross_right,0))/2, 0)
-                    terminal_rewards[envs:] += np.where(cross_right > 0, -20.0, 0)
+                    terminal_rewards[:envs] += np.where(cross_right != -1, score_avg*(20+np.sqrt(np.maximum(cross_right,0))/2), 0)
+                    terminal_rewards[envs:] += np.where(cross_right != -1, -20.0*score_avg, 0)
 
                     for i in range(4):
-                        shooting[i,0] += np.sum(cross_right[int(envs*i/4):int(envs*(i+1)/4)] > 0)
+                        shooting[i,0] += np.sum(score_avg[int(envs*i/4):int(envs*(i+1)/4)])
                         shooting[i,1] += np.sum(cross_right[int(envs*i/4):int(envs*(i+1)/4)] != -1)
 
                     #(2*envs, 2)
@@ -902,7 +902,7 @@ if train:
                     mallet_time.subtract(next_mallet)
 
                 elif next_action < next_img and next_action < next_mallet:
-                    mallet_pos, _, puck_pos, puck_vel, cross_left, cross_right = sim.step(next_action)
+                    mallet_pos, _, puck_pos, puck_vel, score_avg, cross_right = sim.step(next_action)
 
                     env_err = sim.check_state()
                     entered_left_goal_mask, entered_right_goal_mask = sim.check_goal()
@@ -917,11 +917,11 @@ if train:
                     terminal_rewards[:envs][entered_left_goal_mask] -= 100
                     err_dones[entered_left_goal_mask | entered_right_goal_mask] = True
 
-                    terminal_rewards[:envs] += np.where(cross_right > 0, 20+np.sqrt(np.maximum(cross_right,0))/2, 0)
-                    terminal_rewards[envs:] += np.where(cross_right > 0, -20.0, 0)
+                    terminal_rewards[:envs] += np.where(cross_right != -1, score_avg*(20+np.sqrt(np.maximum(cross_right,0))/2), 0)
+                    terminal_rewards[envs:] += np.where(cross_right != -1, -20.0*score_avg, 0)
 
-                    for i in range(3):
-                        shooting[i,0] += np.sum(cross_right[int(envs*i/4):int(envs*(i+1)/4)] > 0)
+                    for i in range(4):
+                        shooting[i,0] += np.sum(score_avg[int(envs*i/4):int(envs*(i+1)/4)])
                         shooting[i,1] += np.sum(cross_right[int(envs*i/4):int(envs*(i+1)/4)] != -1)
 
                     camera_obs = camera_buffer.get(indices=[img_idx, img_idx+1, img_idx+2, img_idx+5, img_idx+11])
@@ -985,7 +985,7 @@ if train:
                         env_idx_offset=env_idx_offset
                     )
 
-                defender_step = qacting & ((timestep % 5 == 4) | qdones)
+                defender_step = qacting & ((timestep % 3 == 2) | qdones)
 
                 if defender_step.any():
                     td = TensorDict({
@@ -1191,7 +1191,7 @@ if train:
         }, save_filepath)
 
 random_pos = np.random.uniform(np.array([mallet_r+0.05, mallet_r+0.05]), np.array([bounds[0]/2-mallet_r-0.05, bounds[1] - mallet_r-0.05]), (1, 2))
-q_action_idxs = np.full((1,), 5, dtype=np.int32)
+q_action_idxs = np.full((int(envs/2),), 5, dtype=np.int32)
 
 shooting = np.zeros((4,2,))
 update = 0
@@ -1231,7 +1231,7 @@ for timestep in range(100000):
             left_puck = past_obs[int(envs/2):envs,0] < bounds[0]/2
 
             if left_puck.any():
-                if timestep % 5 == 0:
+                if timestep % 3 == 0:
                     tensor_obs = TensorDict({"observation": torch.tensor(past_obs[envs+int(envs/2):][left_puck], dtype=torch.float32)}).to('cuda')
                     #tensor_obs = TensorDict({"observation": torch.tensor(past_obs[envs+int(envs/2):], dtype=torch.float32)}).to('cuda')
 
@@ -1242,10 +1242,10 @@ for timestep in range(100000):
 
                     # Sample an action from the categorical distribution
                     dist = Categorical(probs)
-                    q_action = dist.sample().detach().cpu().numpy()
-                    
-                    q_action = np.where(np.random.rand(np.sum(left_puck)) < q_epsilon, np.random.randint(0,3, size=np.sum(left_puck)), q_action)
-                    q_action_idxs[left_puck] = np.clip(q_action - 1 + q_action_idxs[left_puck], 0, 4)
+                    q_action[left_puck] = dist.sample().detach().cpu().numpy()
+                            
+                    q_action[left_puck] = np.where(np.random.rand(np.sum(left_puck)) < q_epsilon, np.random.randint(0,3, size=np.sum(left_puck)), q_action[left_puck])
+                    q_action_idxs[left_puck] = np.clip(q_action[left_puck] - 1 + q_action_idxs[left_puck], 0, 4)
                 actions_np[envs+int(envs/2):, :][left_puck] = action_map[q_action_idxs[left_puck]]
             
     xf = np.stack([actions_np[:envs, :2], actions_np[envs:,:2]], axis=1)
@@ -1312,7 +1312,7 @@ for timestep in range(100000):
 
         if next_img < next_mallet and next_img < next_action:
             #mallet_pos (mallet, op_mallet)
-            mallet_pos, _, puck_pos, _, cross_left, cross_right = sim.step(next_img)
+            mallet_pos, _, puck_pos, _, score_avg, cross_right = sim.step(next_img)
 
             env_err = sim.check_state()
             entered_left_goal_mask, entered_right_goal_mask = sim.check_goal()
@@ -1327,11 +1327,11 @@ for timestep in range(100000):
             terminal_rewards[:envs][entered_left_goal_mask] -= 100
             err_dones[entered_left_goal_mask | entered_right_goal_mask] = True
 
-            terminal_rewards[:envs] += np.where(cross_right > 0, 20+np.sqrt(np.maximum(cross_right,0))/2, 0)
-            terminal_rewards[envs:] += np.where(cross_right > 0, -20.0, 0)
+            terminal_rewards[:envs] += np.where(cross_right != -1, score_avg*(20+np.sqrt(np.maximum(cross_right,0))/2), 0)
+            terminal_rewards[envs:] += np.where(cross_right != -1, -20.0*score_avg, 0)
 
             for i in range(4):
-                shooting[i,0] += np.sum(cross_right[int(envs*i/4):int(envs*(i+1)/4)] > 0)
+                shooting[i,0] += np.sum(score_avg[int(envs*i/4):int(envs*(i+1)/4)])
                 shooting[i,1] += np.sum(cross_right[int(envs*i/4):int(envs*(i+1)/4)] != -1)
 
             for i in range(2):
@@ -1374,9 +1374,12 @@ for timestep in range(100000):
             agent_actions.put(np.clip(np.random.normal(image_delay[0], image_delay[1]), image_delay[2], image_delay[3]))
             mallet_time.put(agent_actions.get(0) - np.clip(np.random.normal(mallet_delay[0], mallet_delay[1]), mallet_delay[2], mallet_delay[3]))
 
+            if np.any(score_avg > 0):
+                print(score_avg)
+
             inference_img.put(np.logical_not(inference_img.get(0)))
         elif next_mallet < next_img and next_mallet < next_action:
-            mallet_pos, mallet_vel, _, _, cross_left, cross_right = sim.step(next_mallet)
+            mallet_pos, mallet_vel, _, _, score_avg, cross_right = sim.step(next_mallet)
 
             env_err = sim.check_state()
             entered_left_goal_mask, entered_right_goal_mask = sim.check_goal()
@@ -1391,11 +1394,11 @@ for timestep in range(100000):
             terminal_rewards[:envs][entered_left_goal_mask] -= 100
             err_dones[entered_left_goal_mask | entered_right_goal_mask] = True
 
-            terminal_rewards[:envs] += np.where(cross_right > 0, 20+np.sqrt(np.maximum(cross_right,0))/2, 0)
-            terminal_rewards[envs:] += np.where(cross_right > 0, -20.0, 0)
+            terminal_rewards[:envs] += np.where(cross_right != -1, score_avg*(20+np.sqrt(np.maximum(cross_right,0))/2), 0)
+            terminal_rewards[envs:] += np.where(cross_right != -1, -20.0*score_avg, 0)
 
             for i in range(4):
-                shooting[i,0] += np.sum(cross_right[int(envs*i/4):int(envs*(i+1)/4)] > 0)
+                shooting[i,0] += np.sum(score_avg[int(envs*i/4):int(envs*(i+1)/4)])
                 shooting[i,1] += np.sum(cross_right[int(envs*i/4):int(envs*(i+1)/4)] != -1)
 
             #(2*envs, 2)
@@ -1408,11 +1411,11 @@ for timestep in range(100000):
             agent_actions.subtract(next_mallet)
             mallet_time.subtract(next_mallet)
 
-        elif next_action < next_img and next_action < next_mallet:
-            mallet_pos, _, puck_pos, puck_vel, cross_left, cross_right = sim.step(next_action)
+            if np.any(score_avg > 0):
+                print(score_avg)
 
-            if np.linalg.norm(puck_vel, axis=-1)[0] > 7.0:
-                print(np.linalg.norm(puck_vel))
+        elif next_action < next_img and next_action < next_mallet:
+            mallet_pos, _, puck_pos, puck_vel, score_avg, cross_right = sim.step(next_action)
 
             env_err = sim.check_state()
             entered_left_goal_mask, entered_right_goal_mask = sim.check_goal()
@@ -1427,12 +1430,14 @@ for timestep in range(100000):
             terminal_rewards[:envs][entered_left_goal_mask] -= 100
             err_dones[entered_left_goal_mask | entered_right_goal_mask] = True
 
-            terminal_rewards[:envs] += np.where(cross_right > 0, 20+np.sqrt(np.maximum(cross_right,0))/2, 0)
-            terminal_rewards[envs:] += np.where(cross_right > 0, -20.0, 0)
+            terminal_rewards[:envs] += np.where(cross_right != -1, score_avg*(20+np.sqrt(np.maximum(cross_right,0))/2), 0)
+            terminal_rewards[envs:] += np.where(cross_right != -1, -20.0*score_avg, 0)
 
-            for i in range(3):
-                shooting[i,0] += np.sum(cross_right[int(envs*i/4):int(envs*(i+1)/4)] > 0)
+            for i in range(4):
+                shooting[i,0] += np.sum(score_avg[int(envs*i/4):int(envs*(i+1)/4)])
                 shooting[i,1] += np.sum(cross_right[int(envs*i/4):int(envs*(i+1)/4)] != -1)
+
+            print(cross_right)
 
             camera_obs = camera_buffer.get(indices=[img_idx, img_idx+1, img_idx+2, img_idx+5, img_idx+11])
             obs[:,:20] = camera_obs
@@ -1446,7 +1451,14 @@ for timestep in range(100000):
             agent_actions.subtract(next_action)
             mallet_time.subtract(next_action)
 
+            if np.any(score_avg > 0):
+                print(score_avg)
+
             break
+
+    print("--")
+    print(shooting[0,0])
+    print(shooting[0,1])
 
     actions_since_reset += 1
 
@@ -1470,7 +1482,7 @@ for timestep in range(100000):
     #print(obs[0,28:32])
     #print(apply_symmetry(torch.tensor(past_obs[0])[None, :]))
             
-    sim.display_state(1)
+    sim.display_state(0)
 
     #print("---")
     #print(past_obs[0])
@@ -1488,11 +1500,11 @@ for timestep in range(100000):
 
     if num_resets > 0:
         
-        obs[dones] = np.concatenate([obs_init[dones], ab_obs], axis=1)
+        obs[dones] = np.concatenate([obs_init[dones], ab_obs[dones]], axis=1)
 
         camera_buffer.reset(np.where(dones)[0])
 
-        sim.reset_sim(np.where(dones[:envs])[0], ab_vars)
+        sim.reset_sim(np.where(dones[:envs])[0], ab_vars[dones[:envs]])
 
     past_obs = obs.copy()
     dones[:] = False

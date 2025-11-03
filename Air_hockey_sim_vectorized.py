@@ -728,7 +728,7 @@ def puck_mallet_collision_t(x_p, x_m, v_p, v_m, vpf, d_p, t, v_m_a2, am, a2m, C1
     return t
 
 
-def update_puck(t, mask, t_init, no_M = False, noM_pos = None, noM_vel = None, indicies=False, noM_xm = None):
+def update_puck(t, mask, t_init, no_M = False, noM_pos = None, noM_vel = None, indicies=False, noM_xm = None, calculate_cross_left = False):
     if no_M:
         vel = noM_vel[mask]
         pos = noM_pos[mask]
@@ -966,10 +966,11 @@ def update_puck(t, mask, t_init, no_M = False, noM_pos = None, noM_vel = None, i
         crossed_to_left = (new_pos[:,0] < surface[0]/2 - puck_radius) & (vel[:,0] < 0) & (pos[:,0] > surface[0]/2 - puck_radius)
         crossed_to_right = (new_pos[:,0] > surface[0]/2 + puck_radius) & (vel[:,0] > 0) & (pos[:,0] < surface[0]/2 + puck_radius)
 
-        cross_left = np.full_like(recurr_time_m, -1)
+        if calculate_cross_left:
+            cross_left = np.full_like(recurr_time_m, -1)
         cross_right = np.full_like(recurr_time_m, -1)
 
-        if np.any(crossed_to_left):
+        if calculate_cross_left and np.any(crossed_to_left):
             dist = np.sqrt(np.sum((pos[crossed_to_left] - new_pos[crossed_to_left])**2, axis=1)) * (pos[crossed_to_left,0] - (surface[0]/2-puck_radius)) / (pos[crossed_to_left,0] - new_pos[crossed_to_left,0])
             speed = np.sqrt(np.sum(vel[crossed_to_left]**2, axis=1))
             Bmw = Bm[crossed_to_left]
@@ -1010,6 +1011,8 @@ def update_puck(t, mask, t_init, no_M = False, noM_pos = None, noM_vel = None, i
             entered_goal = noM_pos[:,0] < 0
             cross_left[crossed_to_left] = np.where(entered_goal, np.where(hitM, -0.25, np.sum(center_vel**2, axis=1)), -0.5)
 
+        times_scored = np.zeros_like(crossed_to_right, dtype=np.uint16)
+
         if np.any(crossed_to_right):
             dist = np.sqrt(np.sum((pos[crossed_to_right] - new_pos[crossed_to_right])**2, axis=1)) * (pos[crossed_to_right,0] - (surface[0]/2+puck_radius)) / (pos[crossed_to_right,0] - new_pos[crossed_to_right,0])
             speed = np.sqrt(np.sum(vel[crossed_to_right]**2, axis=1))
@@ -1044,14 +1047,20 @@ def update_puck(t, mask, t_init, no_M = False, noM_pos = None, noM_vel = None, i
 
             x_mc = get_pos_mask(t_init[crossed_to_right]+root, CEm, A2CEm, A3CEm, A4CEm, abm, am, a2m, C1m, C2m, C3m, C4m)
 
-            if indicies:
-                noM_pos, _, hitM = step_noM(1.0, center_pos, center_vel, mask[crossed_to_right], x_mc)
-            else:
-                noM_pos, _, hitM = step_noM(1.0, center_pos, center_vel, np.where(mask)[0][crossed_to_right].astype(np.int32), x_mc)
-            entered_goal = noM_pos[:,0] > surface[0]
-            cross_right[crossed_to_right] = np.where(entered_goal, np.where(hitM, -0.25, np.sum(center_vel**2, axis=1)), -0.5)
+            for puck_rollout in range(20):
+                if indicies:
+                    noM_pos, _, hitM = step_noM(1.0, center_pos, center_vel, mask[crossed_to_right], x_mc)
+                else:
+                    noM_pos, _, hitM = step_noM(1.0, center_pos, center_vel, np.where(mask)[0][crossed_to_right].astype(np.int32), x_mc)
+                entered_goal = noM_pos[:,0] > surface[0]
+                times_scored[crossed_to_right] += np.logical_and(entered_goal, np.logical_not(hitM))
 
-        return new_pos, new_vel, recurr_time_m, recurr_mask_m, cross_left, cross_right
+            cross_right[crossed_to_right] = np.sum(center_vel**2, axis=1)
+
+        if calculate_cross_left:
+            return new_pos, new_vel, recurr_time_m, recurr_mask_m, cross_left, cross_right
+        else:
+            return new_pos, new_vel, recurr_time_m, recurr_mask_m, times_scored/20.0, cross_right 
 
     if noM_xm is not None:
         mpd = np.sum((noM_xm[:,0,:]-pos) * dir, axis=1)
@@ -1602,7 +1611,7 @@ def update_path(time, xf, Vo, reset_mask):
     a = solve_a()
     a2 = 2*a - x_f*C7/C1+C2/C1
 
-def step(t):
+def step(t, calculate_cross_left = False):
     global time
     global puck_pos
     global mallet_pos
@@ -1613,49 +1622,75 @@ def step(t):
     recurr_time = np.full((game_number), t, dtype="float32")
     #mallet_hit = np.full((game_number, 2), False)
     #puck_wall_collision = np.full((game_number, 2), False)
-    cross_left = np.full((game_number), -1.0)
     cross_right = np.full((game_number), -1.0)
     counter = 0
     indexed = False
     #print("--")
 
+    if calculate_cross_left:
+        cross_left = np.full((game_number), -1.0)
+        while np.any(recurr_mask):
+            counter += 1
+            if counter == 100:
+                puck_pos[recurr_mask] = np.array([1,-1])
+                puck_vel[recurr_mask] = np.array([0,0])
+            #clock.tick(60)
+            if recurr_mask.sum() / len(recurr_mask) < 0.1 and not indexed:
+                indexed = True
+                recurr_mask = np.array(np.where(recurr_mask)[0])
+            #print(indexed)
+            if not indexed:
+                puck_pos[recurr_mask], puck_vel[recurr_mask], recurr_time[recurr_mask], recurr_mask2, cross_left_n, cross_right_n = update_puck(recurr_time[recurr_mask], recurr_mask, time + (t-recurr_time)[recurr_mask])
+                cross_right[recurr_mask] = np.maximum(cross_right_n, cross_right[recurr_mask])
+                cross_left[recurr_mask] = np.maximum(cross_left_n, cross_left[recurr_mask])
+                #puck_wall_collision[recurr_mask] = puck_wall_collision[recurr_mask] | puck_wc
+                #if np.any(pm_mask):
+                #    mallet_hit[recurr_mask,0] = np.logical_or(pm_mask, mallet_hit[recurr_mask][:,0]) & (puck_pos[recurr_mask][:,0] < surface[0]/2)
+                #    mallet_hit[recurr_mask,1] = np.logical_or(pm_mask, mallet_hit[recurr_mask][:,1]) & (puck_pos[recurr_mask][:,0] > surface[0]/2)
+                recurr_mask[recurr_mask] = recurr_mask2
+            else:
+                puck_pos[recurr_mask], puck_vel[recurr_mask], recurr_time[recurr_mask], recurr_mask2, cross_left_n, cross_right_n = update_puck(recurr_time[recurr_mask], recurr_mask, time + (t-recurr_time)[recurr_mask], indicies=True)
+                cross_right[recurr_mask] = np.maximum(cross_right_n, cross_right[recurr_mask])
+                cross_left[recurr_mask] = np.maximum(cross_left_n, cross_left[recurr_mask])
+                #puck_wall_collision[recurr_mask] = puck_wall_collision[recurr_mask] | puck_wc
+                #if np.any(pm_mask):
+                #    mallet_hit[recurr_mask[pm_mask],0] = (puck_pos[recurr_mask[pm_mask]][:,0] < surface[0]/2)
+                #    mallet_hit[recurr_mask[pm_mask],1] = (puck_pos[recurr_mask[pm_mask]][:,0] > surface[0]/2)
+                recurr_mask = recurr_mask[recurr_mask2]
+            #print(clock.tick(60)/1000.0)
+            #print(counter)
+            
+            #print("---")
+        time += t
+        mallet_pos[np.logical_not(reset_mask)] = get_pos(np.full((game_number), time))[np.logical_not(reset_mask)]
+        mallet_vel[np.logical_not(reset_mask)] = get_xp(np.full((game_number),time))[np.logical_not(reset_mask)]
+
+        return mallet_pos, mallet_vel, puck_pos, puck_vel, cross_left, cross_right #mallet_hit, puck_wall_collision
+
+    score_avg = np.full((game_number), 0.0)
     while np.any(recurr_mask):
         counter += 1
         if counter == 100:
             puck_pos[recurr_mask] = np.array([1,-1])
             puck_vel[recurr_mask] = np.array([0,0])
-        #clock.tick(60)
         if recurr_mask.sum() / len(recurr_mask) < 0.1 and not indexed:
             indexed = True
             recurr_mask = np.array(np.where(recurr_mask)[0])
-        #print(indexed)
         if not indexed:
-            puck_pos[recurr_mask], puck_vel[recurr_mask], recurr_time[recurr_mask], recurr_mask2, cross_left_n, cross_right_n = update_puck(recurr_time[recurr_mask], recurr_mask, time + (t-recurr_time)[recurr_mask])
-            cross_right[recurr_mask] = np.maximum(cross_right_n, cross_right[recurr_mask])
-            cross_left[recurr_mask] = np.maximum(cross_left_n, cross_left[recurr_mask])
-            #puck_wall_collision[recurr_mask] = puck_wall_collision[recurr_mask] | puck_wc
-            #if np.any(pm_mask):
-            #    mallet_hit[recurr_mask,0] = np.logical_or(pm_mask, mallet_hit[recurr_mask][:,0]) & (puck_pos[recurr_mask][:,0] < surface[0]/2)
-            #    mallet_hit[recurr_mask,1] = np.logical_or(pm_mask, mallet_hit[recurr_mask][:,1]) & (puck_pos[recurr_mask][:,0] > surface[0]/2)
+            puck_pos[recurr_mask], puck_vel[recurr_mask], recurr_time[recurr_mask], recurr_mask2, score_avg_n, cross_right_n = update_puck(recurr_time[recurr_mask], recurr_mask, time + (t-recurr_time)[recurr_mask])
+            cross_right[recurr_mask] = np.where(score_avg_n >= score_avg[recurr_mask], cross_right_n, cross_right[recurr_mask])
+            score_avg[recurr_mask] = np.maximum(score_avg_n, score_avg[recurr_mask])
             recurr_mask[recurr_mask] = recurr_mask2
         else:
-            puck_pos[recurr_mask], puck_vel[recurr_mask], recurr_time[recurr_mask], recurr_mask2, cross_left_n, cross_right_n = update_puck(recurr_time[recurr_mask], recurr_mask, time + (t-recurr_time)[recurr_mask], indicies=True)
-            cross_right[recurr_mask] = np.maximum(cross_right_n, cross_right[recurr_mask])
-            cross_left[recurr_mask] = np.maximum(cross_left_n, cross_left[recurr_mask])
-            #puck_wall_collision[recurr_mask] = puck_wall_collision[recurr_mask] | puck_wc
-            #if np.any(pm_mask):
-            #    mallet_hit[recurr_mask[pm_mask],0] = (puck_pos[recurr_mask[pm_mask]][:,0] < surface[0]/2)
-            #    mallet_hit[recurr_mask[pm_mask],1] = (puck_pos[recurr_mask[pm_mask]][:,0] > surface[0]/2)
+            puck_pos[recurr_mask], puck_vel[recurr_mask], recurr_time[recurr_mask], recurr_mask2, score_avg_n, cross_right_n = update_puck(recurr_time[recurr_mask], recurr_mask, time + (t-recurr_time)[recurr_mask], indicies=True)
+            cross_right[recurr_mask] = np.where(score_avg_n >= score_avg[recurr_mask], cross_right_n, cross_right[recurr_mask])
+            score_avg[recurr_mask] = np.maximum(score_avg_n, score_avg[recurr_mask])
             recurr_mask = recurr_mask[recurr_mask2]
-        #print(clock.tick(60)/1000.0)
-        #print(counter)
-        
-        #print("---")
     time += t
     mallet_pos[np.logical_not(reset_mask)] = get_pos(np.full((game_number), time))[np.logical_not(reset_mask)]
     mallet_vel[np.logical_not(reset_mask)] = get_xp(np.full((game_number),time))[np.logical_not(reset_mask)]
 
-    return mallet_pos, mallet_vel, puck_pos, puck_vel, cross_left, cross_right #mallet_hit, puck_wall_collision
+    return mallet_pos, mallet_vel, puck_pos, puck_vel, score_avg, cross_right
 
 def impulse(epsilon, delta):
     global puck_vel

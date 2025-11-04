@@ -225,13 +225,13 @@ def collect_data():
     pos[0,:] = pully_R
     idx = 1
     
-    delay = np.random.random() * 0.3 + 0.2 #+ 0.02
+    delay = np.random.random() * 0.1 + 0.02 # 0.3 + 0.2
     
     while True:
         # Read entire buffer
         
         if time.perf_counter() - t1 > delay:
-            delay = np.random.random() * 0.3 + 0.2
+            delay = np.random.random() * 0.1 + 0.02
             if idx > 21:
                 #counter += 1
                 xf = np.array([np.random.random() * (0.4) + 0.3, np.random.random() * 0.4 + 0.3])
@@ -325,7 +325,7 @@ def collect_data():
             #print(pwms)
             #print("------")
             #print(dts)
-            with open("feedforward_feedback_data_delayed.csv", "w", newline="") as f:
+            with open("feedforward_feedback_data_applied_voltage.csv", "w", newline="") as f:
                 writer = csv.writer(f)
                 # Write header
                 writer.writerow(["x", "y", "Left_PWM", "Right_PWM", "dt"])

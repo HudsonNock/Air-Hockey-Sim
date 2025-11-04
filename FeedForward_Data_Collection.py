@@ -24,13 +24,6 @@ torch.set_num_threads(2)
 torch.set_num_interop_threads(1)
 
 table_bounds = np.array([1.993, 0.992])
-obs_dim = 51
-obs = np.zeros((obs_dim,), dtype=np.float32)
-obs[32:32+14] = np.array([[0.75, 0.01, 0.7, 0.7, 0.01, 0.65, 0.02, 0.8, 0.01, 0.75, 0.74, 0.01, 0.73, 0.02]])
-#obs[32+7:32+14] = np.array([0.8, 0.3, 0.6, 0.7, 0.2, 0.4, 0.03]) #mallet res
-obs[32+14:] = np.array([ap.a1/ap.pullyR * 1e4, ap.a2/ap.pullyR * 1e1, ap.a3/ap.pullyR * 1e0, ap.b1/ap.pullyR * 1e4, ap.b2/ap.pullyR * 1e1])
-obs[32+14:] *= 1.2
-#e_n0, e_nr, e_nf, e_t0, e_tr, e_tf, std
 
 margin = 0.03
 margin_bottom = 0.03
@@ -210,7 +203,7 @@ def collect_data():
         pos, vel, acc, passed = get_mallet(ser)
             
     xf = np.array([0.7, 0.5])
-    Vo = np.array([12, 12])
+    Vo = np.array([13, 13])
     
     data = ap.update_path(pos, vel, acc, xf, Vo)
     ser.write(b'\n' + data + b'\n')
@@ -232,24 +225,24 @@ def collect_data():
     pos[0,:] = pully_R
     idx = 1
     
-    delay = np.random.random() * (0.08 - 0.02) + 0.02
+    delay = np.random.random() * 0.3 + 0.2 #+ 0.02
     
     while True:
         # Read entire buffer
         
         if time.perf_counter() - t1 > delay:
-            delay = np.random.random() * (0.08 - 0.02) + 0.02
+            delay = np.random.random() * 0.3 + 0.2
             if idx > 21:
                 #counter += 1
                 xf = np.array([np.random.random() * (0.4) + 0.3, np.random.random() * 0.4 + 0.3])
-                #Vo = np.array([np.random.random() * 5 + 16, np.random.random() * 5 + 16])
-                Vo = np.array([12, 12])
+                Vo = np.array([np.random.random() * (24*0.8-5) + 5, np.random.random() * (24*0.8-5) + 5])
+                #Vo = np.array([13, 13])
                 
                 ts = np.cumsum(dts[idx-21:idx])
                 coef_x = np.polyfit(ts, pos[idx-21:idx,0], 2)
                 coef_y = np.polyfit(ts, pos[idx-21:idx,1], 2)
                 
-                t = ts[-1] + 0.004
+                t = ts[-1] + 4.0768/1000
                 
                 pred_pos = np.array([coef_x[0]*t**2 + coef_x[1]*t + coef_x[2], \
                                 coef_y[0]*t**2 + coef_y[1]*t + coef_y[2]])
@@ -309,7 +302,7 @@ def collect_data():
 
             pos[idx, :] = np.array([deq(p0, -0.5, 2), deq(p1, -0.5, 2)])
             pwms[idx, :] = np.array([deq(pwm0, -1.1, 1.1), deq(pwm1, -1.1, 1.1)])
-            dts[idx] = deq(dt, 0, 2)
+            dts[idx] = deq(dt, 0, 3)
     
             #if abs(deq(v0, -1.1, 1.1)) < 0.02 and abs(deq(v1, -1.1, 1.1)) < 0.02:
             #    #print(abs(deq(v0, -1.1, 1.1)))
@@ -332,7 +325,7 @@ def collect_data():
             #print(pwms)
             #print("------")
             #print(dts)
-            with open("bluepill_period_time.csv", "w", newline="") as f:
+            with open("feedforward_feedback_data_delayed.csv", "w", newline="") as f:
                 writer = csv.writer(f)
                 # Write header
                 writer.writerow(["x", "y", "Left_PWM", "Right_PWM", "dt"])

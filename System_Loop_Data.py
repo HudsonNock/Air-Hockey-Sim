@@ -24,13 +24,12 @@ torch.set_num_threads(2)
 torch.set_num_interop_threads(1)
 
 table_bounds = np.array([1.993, 0.992])
-obs_dim = 51
+obs_dim = 38
 obs = np.zeros((obs_dim,), dtype=np.float32)
-obs[32:32+14] = np.array([[0.75, 0.01, 0.7, 0.7, 0.01, 0.65, 0.02, 0.8, 0.01, 0.75, 0.74, 0.01, 0.73, 0.02]])
-#obs[32+7:32+14] = np.array([0.8, 0.3, 0.6, 0.7, 0.2, 0.4, 0.03]) #mallet res
-obs[32+14:] = np.array([ap.a1/ap.pullyR * 1e4, ap.a2/ap.pullyR * 1e1, ap.a3/ap.pullyR * 1e0, ap.b1/ap.pullyR * 1e4, ap.b2/ap.pullyR * 1e1])
-obs[32+14:] *= 1.2
-#e_n0, e_nr, e_nf, e_t0, e_tr, e_tf, std
+obs[-6:] = np.array([ap.a1/ap.pullyR * 1e4, ap.a2/ap.pullyR * 1e1, ap.a3/ap.pullyR * 1e0, ap.b1/ap.pullyR * 1e4, ap.b2/ap.pullyR * 1e1, ap.b3/ap.pullyR * 1e1])
+obs[-3] = (-6.5e-06)/ap.pullyR * 1e4
+
+obs_flip = np.empty((obs_dim), dtype=np.float32)
 
 margin = 0.03
 margin_bottom = 0.03
@@ -401,6 +400,16 @@ def get_init_conditions(pred=0):
                     
     return pos, vel, acc
     
+def apply_symmetry(t_obs):
+    obs_flip[:] = t_obs
+    obs_flip[1:22:2] = table_bounds[1] - obs_flip[1:22:2]
+    obs_flip[23] *= -1
+    obs_flip[27] *= -1
+    obs_flip[25] = table_bounds[1] - obs_flip[25]
+    obs_flip[29] = table_bounds[1] - obs_flip[29]
+
+    return obs_flip
+    
 
 def system_loop(cam, load, pro):
     """Optimized timing measurement with minimal overhead"""
@@ -486,7 +495,7 @@ def system_loop(cam, load, pro):
     ap.pullyR = pully_R
     ap.C1 = [ap.Vmax * ap.pullyR / 2, ap.Vmax * ap.pullyR / 2]
     
-    obs[32+14:] = np.array([ap.a1/ap.pullyR * 1e4, ap.a2/ap.pullyR * 1e1, ap.a3/ap.pullyR * 1e0, ap.b1/ap.pullyR * 1e4, ap.b2/ap.pullyR * 1e1])
+    obs[-6:] = np.array([ap.a1/ap.pullyR * 1e4, ap.a2/ap.pullyR * 1e1, ap.a3/ap.pullyR * 1e0, (-6.5e-06)/ap.pullyR * 1e4, ap.b2/ap.pullyR * 1e1, ap.b3/ap.pullyR * 1e1]) * 1.15
     
     ser.reset_input_buffer()
     
@@ -613,6 +622,8 @@ def system_loop(cam, load, pro):
     recording_data = np.zeros([20000, 7])
     idx = 0
     timer = time.perf_counter()
+    left_hysteresis = False
+    symmetry = False
     while True:
     
         image = cam.GetNextImage()
@@ -632,13 +643,19 @@ def system_loop(cam, load, pro):
         obs[20:22] = pos #add current mallet pos
         obs[22:24] = vel
         
+        if left_hysteresis and obs[0] > table_bounds[0]/2 + 0.1:
+            left_hysteresis = False
+            symmetry = np.random.random() < 0.5
+        elif (not left_hysteresis) and obs[0] < table_bounds[0]/2 - 0.1:
+            left_hysteresis = True
+        
         recording_data[idx,:2] = obs[:2]
         recording_data[idx,2:6] = obs[20:24]
         recording_data[idx,6] = time_diff
         idx += 1
         
         if idx == len(recording_data):
-            with open("system_loop_data6.csv", "w", newline="") as f:
+            with open("system_loop_data_N1.csv", "w", newline="") as f:
                 writer = csv.writer(f)
                 # Write header
                 writer.writerow(["Px", "Py", "Mx", "My", "Mxv", "Myv", "dt"])
@@ -649,14 +666,24 @@ def system_loop(cam, load, pro):
             print("SIGNAL END")
             break
         
-        tensor_obs = TensorDict({"observation": torch.tensor(obs, dtype=torch.float32)})
+        
         #print("--")
         #print(obs)
                        
-        with torch.no_grad():
-        	policy_out = ap.policy_module(tensor_obs)
+        
+        if symmetry:
+            tensor_obs = TensorDict({"observation": torch.tensor(obs, dtype=torch.float32)})
+            with torch.no_grad():
+                policy_out = ap.policy_module(tensor_obs)
+            action = policy_out["action"].detach().numpy()
+        else:
+            tensor_obs = TensorDict({"observation": torch.tensor(apply_symmetry(obs), dtype=torch.float32)})
+            with torch.no_grad():
+                policy_out = ap.policy_module(tensor_obs)
+            action = policy_out["action"].detach().numpy()
+            action[1] = table_bounds[1] - action[1]
 
-        action = policy_out["action"].detach().numpy()
+        
         obs[28:32] = action
         #print(action)
         no_update = (np.linalg.norm(obs[20:22] - obs[24:26]) < 0.01) and (np.linalg.norm(obs[28:30] - action[:2]) < 0.01) and (np.linalg.norm(action[:2] - obs[20:22]) < 0.01)
@@ -686,8 +713,8 @@ def system_loop(cam, load, pro):
             
 
             Vo = action[2] * Vmax * np.array([1+action[3],1-action[3]])
-            #Vo[0] = np.minimum(Vo[0], 5)
-            #Vo[1] = np.minimum(Vo[1], 5)
+            #Vo[0] = np.minimum(Vo[0], 6)
+            #Vo[1] = np.minimum(Vo[1], 6)
             #print("A")
             #print(xf)
             #print(Vo)
@@ -723,7 +750,7 @@ def system_loop(cam, load, pro):
         idx += 1
         
         if idx == len(recording_data):
-            with open("system_loop_data6.csv", "w", newline="") as f:
+            with open("system_loop_data_N1.csv", "w", newline="") as f:
                 writer = csv.writer(f)
                 # Write header
                 writer.writerow(["Px", "Py", "Mx", "My", "Mxv", "Myv", "dt"])

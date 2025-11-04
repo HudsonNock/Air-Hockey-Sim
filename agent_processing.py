@@ -17,7 +17,7 @@ import queue
 import cv2
 import struct
 
-obs_dim = 51
+obs_dim = 38
 action_dim = 4
 height = 1.993
 width = 0.992
@@ -79,7 +79,7 @@ policy_module = ProbabilisticActor(
 # Vx + Vy < 2*(Vmax)
 # sqrt(2* (2*Vmax)^2)
 
-checkpoint = torch.load("model_183.pth", map_location="cpu")
+checkpoint = torch.load("model_188.pth", map_location="cpu")
 policy_module.load_state_dict(checkpoint['policy_state_dict'])
 del checkpoint
 #policy_module.load_state_dict(torch.load("model_183.pth"), map_location=torch.device("cpu")) #8

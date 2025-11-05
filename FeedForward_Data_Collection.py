@@ -83,7 +83,7 @@ def deq(q, xmin, xmax):
     return (y+1)/2 * (xmax - xmin) + xmin
     
 def get_mallet(ser):    
-    FMT = '<hhhhhB'    # 6×int16, 1×uint8
+    FMT = '<hhhhhhhB'    # 6×int16, 1×uint8
     FRAME_SIZE = struct.calcsize(FMT)
     
     # Read entire buffer
@@ -121,7 +121,7 @@ def get_mallet(ser):
         return None, None, None, False
     
     # Unpack the data
-    p0, p1, pwm0, pwm1, dt, chk = struct.unpack(FMT, raw)
+    p0, p1, ep0, ep1, pwm0, pwm1, dt, chk = struct.unpack(FMT, raw)
 
     # Verify checksum
     c = 0
@@ -210,12 +210,13 @@ def collect_data():
     
     buffer = bytearray()
     
-    FMT = '<hhhhhB'    # 5×int16, 1×uint8
+    FMT = '<hhhhhhhB'    # 5×int16, 1×uint8
     FRAME_SIZE = struct.calcsize(FMT)
     
     sample_len = 10000
     pos = np.zeros((sample_len,2))
     exp_pos = np.zeros((sample_len,2))
+    pwms = np.zeros((sample_len,2))
     dts = np.zeros((sample_len,))
     
     signal_end = False
@@ -291,7 +292,7 @@ def collect_data():
                 break
 
             # Unpack the data
-            p0, p1, ep0, ep1, dt, chk = struct.unpack(FMT, raw)
+            p0, p1, ep0, ep1, pwm0, pwm1, dt, chk = struct.unpack(FMT, raw)
 
             # Verify checksum
             c = 0
@@ -302,6 +303,7 @@ def collect_data():
 
             pos[idx, :] = np.array([deq(p0, -0.5, 2), deq(p1, -0.5, 2)])
             exp_pos[idx, :] = np.array([deq(ep0, -0.5, 2), deq(ep1, -0.5, 2)])
+            pwms[idx,:] = np.array([deq(pwm0, -1.1, 1.1), deq(pwm1, -1.1, 1.1)])
             dts[idx] = deq(dt, 0, 3)
     
             #if abs(deq(v0, -1.1, 1.1)) < 0.02 and abs(deq(v1, -1.1, 1.1)) < 0.02:
@@ -328,11 +330,11 @@ def collect_data():
             with open("feedforward_feedback_data_delayed.csv", "w", newline="") as f:
                 writer = csv.writer(f)
                 # Write header
-                writer.writerow(["x", "y", "Expected_x", "Expected_y", "dt"])
+                writer.writerow(["x", "y", "Expected_x", "Expected_y", "pwm_x", "pwm_y", "dt"])
                 
                 # Write rows
-                for p, pwm, dt in zip(pos, exp_pos, dts):
-                    writer.writerow([p[0], p[1], pwm[0], pwm[1], dt])
+                for p, ep, pwm, dt in zip(pos, exp_pos, pwms, dts):
+                    writer.writerow([p[0], p[1], ep[0], ep[1], pwm[0], pwm[1], dt])
             print("SIGNAL END")
             break
                 

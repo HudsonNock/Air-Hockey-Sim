@@ -203,7 +203,7 @@ def collect_data():
         pos, vel, acc, passed = get_mallet(ser)
             
     xf = np.array([0.7, 0.5])
-    Vo = np.array([13, 14])
+    Vo = np.array([3.5, 3.5])
     
     data = ap.update_path(pos, vel, acc, xf, Vo)
     ser.write(b'\n' + data + b'\n')
@@ -225,18 +225,18 @@ def collect_data():
     pos[0,:] = pully_R
     idx = 1
     
-    delay = np.random.random() * 0.1 + 0.02 #0.3 + 0.2 
+    delay = np.random.random() * 0.3 + 0.2 #0.1 + 0.02
     
     while True:
         # Read entire buffer
         
         if time.perf_counter() - t1 > delay:
-            delay = np.random.random() * 0.1 + 0.02
+            delay = np.random.random() * 0.3 + 0.2  #0.1 + 0.02
             if idx > 21:
                 #counter += 1
                 xf = np.array([np.random.random() * (0.4) + 0.3, np.random.random() * 0.4 + 0.3])
-                Vo = np.array([np.random.random() * (24*0.8-5) + 5, np.random.random() * (24*0.8-5) + 5])
-                #Vo = np.array([5, 5.5])
+                #Vo = np.array([np.random.random() * (24*0.8-5) + 5, np.random.random() * (24*0.8-5) + 5])
+                Vo = np.array([3.5, 3.5])
                 
                 ts = np.cumsum(dts[idx-21:idx])
                 coef_x = np.polyfit(ts, pos[idx-21:idx,0], 2)
@@ -325,7 +325,7 @@ def collect_data():
             #print(pwms)
             #print("------")
             #print(dts)
-            with open("feedforward_feedback_data_applied_voltage.csv", "w", newline="") as f:
+            with open("feedforward_feedback_data_delayed.csv", "w", newline="") as f:
                 writer = csv.writer(f)
                 # Write header
                 writer.writerow(["x", "y", "Left_PWM", "Right_PWM", "dt"])

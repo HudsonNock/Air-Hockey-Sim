@@ -495,7 +495,14 @@ def system_loop(cam, load, pro):
     ap.pullyR = pully_R
     ap.C1 = [ap.Vmax * ap.pullyR / 2, ap.Vmax * ap.pullyR / 2]
     
-    obs[-6:] = np.array([ap.a1/ap.pullyR * 1e4, ap.a2/ap.pullyR * 1e1, ap.a3/ap.pullyR * 1e0, (-6.5e-06)/ap.pullyR * 1e4, ap.b2/ap.pullyR * 1e1, ap.b3/ap.pullyR * 1e1])
+    a1 = 7.474*10**(-6) #3.579*10**(-6)
+    a2 = 6.721*10**(-3) #0.00571
+    a3 = 6.658*10**(-2) #(0.0596+0.0467)/2
+    b1 = -1.607*10**(-6) #-1.7165*10**(-6)
+    b2 = -2.731*10**(-3) #-0.002739
+    b3 = 3.610*10**(-3)
+    
+    obs[-6:] = np.array([a1/ap.pullyR * 1e4, a2/ap.pullyR * 1e1, a3/ap.pullyR * 1e0, (-6.5e-06)/ap.pullyR * 1e4, b2/ap.pullyR * 1e1, b3/ap.pullyR * 1e1]) * 1.1
     
     ser.reset_input_buffer()
     
@@ -655,7 +662,7 @@ def system_loop(cam, load, pro):
         idx += 1
         
         if idx == len(recording_data):
-            with open("system_loop_data_N4.csv", "w", newline="") as f:
+            with open("system_loop_data_N6.csv", "w", newline="") as f:
                 writer = csv.writer(f)
                 # Write header
                 writer.writerow(["Px", "Py", "Mx", "My", "Mxv", "Myv", "dt"])
@@ -750,7 +757,7 @@ def system_loop(cam, load, pro):
         idx += 1
         
         if idx == len(recording_data):
-            with open("system_loop_data_N4.csv", "w", newline="") as f:
+            with open("system_loop_data_N6.csv", "w", newline="") as f:
                 writer = csv.writer(f)
                 # Write header
                 writer.writerow(["Px", "Py", "Mx", "My", "Mxv", "Myv", "dt"])

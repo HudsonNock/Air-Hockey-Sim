@@ -138,6 +138,10 @@ C2 = [0,0]
 C3 = [0,0]
 C4 = [0,0]
 
+Vf = [0,0]
+vt_1 = [0,0]
+vt_2 = [0,0]
+
 #A e^(at) + B e^(bt) + Ct + D
 def f(x, i, eat, ebt):
     return CE[i][0] * eat \
@@ -233,12 +237,79 @@ def solve_C1n(x, k):
         return 1 + x[0]
     return C2[k]/C7[k] - (x[0]/(ab[k][1]*C7[k])*\
                 math.log((x[0]*CE[k][3])/(-x[0]*CE[k][1]+C2[k]*A2CE[k][1]+C3[k]*A3CE[k][1]+C4[k]*A4CE[k][1]))) - mallet_bounds[k][0]
+                
+def get_IC(t):
+    pos = [0,0]
+    vel = [0,0]
+    acc = [0,0]
+    
+    for i in range(2):
+        eat = np.exp(ab[i][0] * t)
+        ebt = np.exp(ab[i][1] * t)
+        
+        eatp = ab[i][0] * eat
+        ebtp = ab[i][1] * ebt
+        
+        eatpp = ab[i][0] * eatp
+        ebtpp = ab[i][1] * ebtp
+        
+        A_pos = [A2CE[i][0] * eat + A2CE[i][1] * ebt + A2CE[i][2],\
+                 A3CE[i][0] * eat + A3CE[i][1] * ebt,\
+                 A4CE[i][0] * eat + A4CE[i][1] * ebt]
+                 
+        A_vel = [A2CE[i][0] * eatp + A2CE[i][1] * ebtp,\
+                 A3CE[i][0] * eatp + A3CE[i][1] * ebtp,\
+                 A4CE[i][0] * eatp + A4CE[i][1] * ebtp]
+        
+        A_acc = [A2CE[i][0] * eatpp + A2CE[i][1] * ebtpp,\
+                 A3CE[i][0] * eatpp + A3CE[i][1] * ebtpp,\
+                 A4CE[i][0] * eatpp + A4CE[i][1] * ebtpp]
+        
+        #A_2 = A2CE[i][0] * eat + A2CE[i][1] * ebt + A2CE[i][2]
+        #A_3 = A3CE[i][0] * eat + A3CE[i][1] * ebt
+        #A_4 = A4CE[i][0] * eat + A4CE[i][1] * ebt
+        
+        f_t = [CE[i][0] * eat + CE[i][1] * ebt + CE[i][2]*t+CE[i][3],\
+               CE[i][0] * eatp + CE[i][1] * ebtp + CE[i][2],\
+               CE[i][0] * eatpp + CE[i][1] * ebtpp]
+    
+        g_a1 = [0,0,0]
+        g_a2 = [0,0,0]
+        
+        
+        tms = t-vt_1[i]
+        if tms > 0:
+            eatms = np.exp(ab[i][0]*tms)
+            ebtms = np.exp(ab[i][1]*tms)
+            g_a1[0] = CE[i][0] * eatms + CE[i][1] * ebtms + CE[i][2]*tms+CE[i][3]
+            g_a1[1] = CE[i][0] * ab[i][0] * eatms + CE[i][1] * ab[i][1] * ebtms + CE[i][2]
+            g_a1[2] = CE[i][0] * ab[i][0]**2 * eatms + CE[i][1] * ab[i][1]**2 * ebtms
+        
+        tms = t-vt_2[i]
+        print(tms)
+        if tms > 0:
+            eatms = np.exp(ab[i][0]*tms)
+            ebtms = np.exp(ab[i][1]*tms)
+            g_a2[0] = CE[i][0] * eatms + CE[i][1] * ebtms + CE[i][2]*tms+CE[i][3]
+            g_a2[1] = CE[i][0] * ab[i][0] * eatms + CE[i][1] * ab[i][1] * ebtms + CE[i][2]
+            g_a2[2] = CE[i][0] * ab[i][0]**2 * eatms + CE[i][1] * ab[i][1]**2 * ebtms
+        
+        pos[i] = 0.5 * Vf[i] * pullyR * (f_t[0] - 2 * g_a1[0] + g_a2[0]) + C2[i] * A_pos[0] + C3[i] * A_pos[1] + C4[i] * A_pos[2]
+        vel[i] = 0.5 * Vf[i] * pullyR * (f_t[1] - 2 * g_a1[1] + g_a2[1]) + C2[i] * A_vel[0] + C3[i] * A_vel[1] + C4[i] * A_vel[2]
+        acc[i] = 0.5 * Vf[i] * pullyR * (f_t[2] - 2 * g_a1[2] + g_a2[2]) + C2[i] * A_acc[0] + C3[i] * A_acc[1] + C4[i] * A_acc[2]
+
+    return np.array(pos), np.array(vel), np.array(acc)
+    
+    
 
 def update_path(x_0, x_p, x_pp, x_f, Vo):
     global C1
     global C2
     global C3
     global C4
+    global Vf
+    global vt_1
+    global vt_2
 
     C2 = [C5[0]*x_pp[0]+C6[0]*x_p[0]+C7[0]*x_0[0], C5[1]*x_pp[1]+C6[1]*x_p[1]+C7[1]*x_0[1]]
     C3 = [C5[0]*x_p[0]+C6[0]*x_0[0],C5[1]*x_p[1]+C6[1]*x_0[1]]
@@ -375,11 +446,14 @@ def update_path(x_0, x_p, x_pp, x_f, Vo):
                 pass
 
     vt_1 = solve_vt1(x_f)
-    vt_2 = [int((2*vt_1[0] - x_f[0]*C7[0]/C1[0]+C2[0]/C1[0])*10000), int((2*vt_1[1]-x_f[1]*C7[1]/C1[1]+C2[1]/C1[1])*10000)]
+    vt_1 = [vt_1[0][0], vt_1[1][0]]
+    vt_2 = [2*vt_1[0] - x_f[0]*C7[0]/C1[0]+C2[0]/C1[0], 2*vt_1[1]-x_f[1]*C7[1]/C1[1]+C2[1]/C1[1]]
+    vt_2_int = [int(val*10000) for val in vt_2]
     
-    vt_1 = [int((vt_1[0][0]) * 10000), int((vt_1[1][0])*10000)]
+    vt_1_int = [int(val*10000) for val in vt_1]
 
-    Vf  = [int(2*C1[0]/pullyR*10000), int(2*C1[1]/pullyR*10000)]
+    Vf = [2*C1[0]/pullyR, 2*C1[1]/pullyR]
+    Vf_int  = [int(val*10000) for val in Vf]
     
     #print("data")
     #print(x_0)
@@ -389,19 +463,19 @@ def update_path(x_0, x_p, x_pp, x_f, Vo):
     #print(np.array(vt_2)/10000.0)
     #print(np.array(Vf)/10000.0)
     
-    C2 = [int(val*100000000) for val in C2]
-    C3 = [int(val*100000000) for val in C3]
-    C4 = [int(val*100000000) for val in C4]
+    C2_int = [int(val*100000000) for val in C2]
+    C3_int = [int(val*100000000) for val in C3]
+    C4_int = [int(val*100000000) for val in C4]
 
-    checksum = vt_1[0] ^ vt_1[1] ^ vt_2[0] ^ vt_2[1] ^ Vf[0] ^ Vf[1] ^ C2[0] ^ C2[1] ^ C3[0] ^ C3[1] ^ C4[0] ^ C4[1]
+    checksum = vt_1_int[0] ^ vt_1_int[1] ^ vt_2_int[0] ^ vt_2_int[1] ^ Vf_int[0] ^ Vf_int[1] ^ C2_int[0] ^ C2_int[1] ^ C3_int[0] ^ C3_int[1] ^ C4_int[0] ^ C4_int[1]
     
     data = struct.pack('<iiiiiiiiiiiii',\
-                       np.int32(vt_1[0]), np.int32(vt_1[1]),\
-                       np.int32(vt_2[0]), np.int32(vt_2[1]),\
-                       np.int32(Vf[0]), np.int32(Vf[1]),\
-                       np.int32(C2[0]), np.int32(C2[1]),\
-                       np.int32(C3[0]), np.int32(C3[1]),\
-                       np.int32(C4[0]), np.int32(C4[1]),\
+                       np.int32(vt_1_int[0]), np.int32(vt_1_int[1]),\
+                       np.int32(vt_2_int[0]), np.int32(vt_2_int[1]),\
+                       np.int32(Vf_int[0]), np.int32(Vf_int[1]),\
+                       np.int32(C2_int[0]), np.int32(C2_int[1]),\
+                       np.int32(C3_int[0]), np.int32(C3_int[1]),\
+                       np.int32(C4_int[0]), np.int32(C4_int[1]),\
                        np.int32(checksum))
     
     return data

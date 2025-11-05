@@ -203,7 +203,7 @@ def collect_data():
         pos, vel, acc, passed = get_mallet(ser)
             
     xf = np.array([0.7, 0.5])
-    Vo = np.array([13, 13])
+    Vo = np.array([13, 14])
     
     data = ap.update_path(pos, vel, acc, xf, Vo)
     ser.write(b'\n' + data + b'\n')
@@ -225,7 +225,7 @@ def collect_data():
     pos[0,:] = pully_R
     idx = 1
     
-    delay = np.random.random() * 0.1 + 0.02 # 0.3 + 0.2
+    delay = np.random.random() * 0.1 + 0.02 #0.3 + 0.2 
     
     while True:
         # Read entire buffer
@@ -236,7 +236,7 @@ def collect_data():
                 #counter += 1
                 xf = np.array([np.random.random() * (0.4) + 0.3, np.random.random() * 0.4 + 0.3])
                 Vo = np.array([np.random.random() * (24*0.8-5) + 5, np.random.random() * (24*0.8-5) + 5])
-                #Vo = np.array([13, 13])
+                #Vo = np.array([5, 5.5])
                 
                 ts = np.cumsum(dts[idx-21:idx])
                 coef_x = np.polyfit(ts, pos[idx-21:idx,0], 2)

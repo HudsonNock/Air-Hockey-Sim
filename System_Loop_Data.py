@@ -389,8 +389,10 @@ def get_init_conditions(pred=0):
     
     t = ts[-1] + pred
     
-    pos = np.array([coef_x[0]*t**2 + coef_x[1]*t + coef_x[2], \
-                    coef_y[0]*t**2 + coef_y[1]*t + coef_y[2]])
+    pos = np.array([coef_x[1]*t + coef_x[2], \
+                    coef_y[1]*t + coef_y[2]])
+                    #np.array([coef_x[0]*t**2 + coef_x[1]*t + coef_x[2], \
+                    #coef_y[0]*t**2 + coef_y[1]*t + coef_y[2]])
                     
     vel = np.array([2*coef_x[0]*t + coef_x[1], \
                     2*coef_y[0]*t + coef_y[1]])
@@ -496,11 +498,11 @@ def system_loop(cam, load, pro):
     ap.C1 = [ap.Vmax * ap.pullyR / 2, ap.Vmax * ap.pullyR / 2]
     
     a1 = 7.474*10**(-6) #3.579*10**(-6)
-    a2 = 6.721*10**(-3) #0.00571
-    a3 = 6.658*10**(-2) #(0.0596+0.0467)/2
+    a2 = 7.575e-03 #6.721*10**(-3) 
+    a3 = 6.969e-02
     b1 = -1.607*10**(-6) #-1.7165*10**(-6)
-    b2 = -2.731*10**(-3) #-0.002739
-    b3 = 3.610*10**(-3)
+    b2 = -2.838e-03 #-2.731*10**(-3)
+    b3 = 3.688e-03
     
     obs[-6:] = np.array([a1/ap.pullyR * 1e4, a2/ap.pullyR * 1e1, a3/ap.pullyR * 1e0, (-6.5e-06)/ap.pullyR * 1e4, b2/ap.pullyR * 1e1, b3/ap.pullyR * 1e1]) * 1.1
     
@@ -693,7 +695,8 @@ def system_loop(cam, load, pro):
         
         obs[28:32] = action
         #print(action)
-        no_update = (np.linalg.norm(obs[20:22] - obs[24:26]) < 0.01) and (np.linalg.norm(obs[28:30] - action[:2]) < 0.01) and (np.linalg.norm(action[:2] - obs[20:22]) < 0.01)
+        no_update_bounds = 0.08
+        no_update = (np.linalg.norm(obs[20:22] - obs[24:26]) < no_update_bounds) and (np.linalg.norm(obs[28:30] - action[:2]) < no_update_bounds) and (np.linalg.norm(action[:2] - obs[20:22]) < no_update_bounds)
         
         if not no_update:
             #print('--')
@@ -720,8 +723,8 @@ def system_loop(cam, load, pro):
             
 
             Vo = action[2] * Vmax * np.array([1+action[3],1-action[3]])
-            #Vo[0] = np.minimum(Vo[0], 6)
-            #Vo[1] = np.minimum(Vo[1], 6)
+            #Vo[0] = np.minimum(Vo[0], 3)
+            #Vo[1] = np.minimum(Vo[1], 3)
             #print("A")
             #print(xf)
             #print(Vo)

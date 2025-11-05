@@ -238,7 +238,7 @@ def collect_data():
                 #Vo = np.array([np.random.random() * (24*0.8-5) + 5, np.random.random() * (24*0.8-5) + 5])
                 Vo = np.array([3.5, 3.5])
                 
-                ts = np.cumsum(dts[idx-21:idx])
+                ts = np.cumsum(dts[idx-21:idx]) / 1000.0
                 coef_x = np.polyfit(ts, pos[idx-21:idx,0], 2)
                 coef_y = np.polyfit(ts, pos[idx-21:idx,1], 2)
                 

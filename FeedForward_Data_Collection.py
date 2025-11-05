@@ -226,13 +226,13 @@ def collect_data():
     pos[0,:] = pully_R
     idx = 1
     
-    delay = np.random.random() * 0.3 + 0.2 #0.1 + 0.02
+    delay = np.random.random() * 0.1 + 0.02 #0.3 + 0.2
     
     while True:
         # Read entire buffer
         
         if time.perf_counter() - t1 > delay:
-            delay = np.random.random() * 0.3 + 0.2  #0.1 + 0.02
+            delay = np.random.random() * 0.1 + 0.02 #0.3 + 0.2
             if idx > 21:
                 #counter += 1
                 xf = np.array([np.random.random() * (0.4) + 0.3, np.random.random() * 0.4 + 0.3])

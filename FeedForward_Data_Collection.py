@@ -236,7 +236,7 @@ def collect_data():
             if idx > 21:
                 #counter += 1
                 xf = np.array([np.random.random() * (0.4) + 0.3, np.random.random() * 0.4 + 0.3])
-                Vo = np.array([np.random.random() * (24*0.7-10) + 10, np.random.random() * (24*0.7-10) + 10])
+                Vo = np.array([np.random.random() * (24*0.8-10) + 10, np.random.random() * (24*0.8-10) + 10])
                 #Vo = np.array([3.5, 3.5])
                 
                 ts = np.cumsum(dts[idx-21:idx]) / 1000.0

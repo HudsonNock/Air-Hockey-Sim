@@ -143,6 +143,12 @@ def collect_data():
     # Disable garbage collection during measurement
     #try:
     
+    action_commands = np.load('actions.npy')
+    target = np.array([0.5, 0.5, 15.0, 15.0, 0.02])
+    mask = ~np.all(action_commands == target, axis=1)
+    action_commands = action_commands[mask]
+
+    
     PORT = '/dev/ttyUSB0'  # Adjust this to COM port or /dev/ttyUSBx
     BAUD = 460800
 
@@ -213,7 +219,7 @@ def collect_data():
     FMT = '<hhhhhhhB'    # 5×int16, 1×uint8
     FRAME_SIZE = struct.calcsize(FMT)
     
-    sample_len = 10000
+    sample_len = 70000
     pos = np.zeros((sample_len,2))
     exp_pos = np.zeros((sample_len,2))
     pwms = np.zeros((sample_len,2))
@@ -226,17 +232,23 @@ def collect_data():
     pos[0,:] = pully_R
     idx = 1
     
-    delay = 0.02 #np.random.random() * 0.1 + 0.02 #0.3 + 0.2
-    
+    #delay = 0.02 #np.random.random() * 0.1 + 0.02 #0.3 + 0.2
+    action_idx = 0
     while True:
         # Read entire buffer
         
-        if time.perf_counter() - t1 > delay:
+        if time.perf_counter() - t1 > action_commands[action_idx, 4]:
             time_passed = time.perf_counter() - t1
             t1 = time.perf_counter()
             
-            xf = np.array([np.random.random() * (0.4) + 0.3, np.random.random() * 0.4 + 0.3])
-            Vo = np.array([np.random.random() * (24*0.8-10) + 10, np.random.random() * (24*0.8-10) + 10])
+            #xf = np.array([np.random.random() * (0.4) + 0.3, np.random.random() * 0.4 + 0.3])
+            #Vo = np.array([np.random.random() * (24*0.8-10) + 10, np.random.random() * (24*0.8-10) + 10])
+            xf = action_commands[action_idx, :2]
+            Vo = action_commands[action_idx, 2:4]
+            action_idx += 1
+            if action_idx == len(action_commands):
+                print("END OF ACTIONS")
+                signal_end = True
             #Vo = np.array([10,10])
             #delay = 0.02 #np.random.random() * 0.1 + 0.02 #0.3 + 0.2
             
@@ -254,7 +266,7 @@ def collect_data():
             pass
         buffer.extend(ser.read(ser.in_waiting))
             
-        while len(buffer) > 60:
+        while len(buffer) > 60 and not signal_end:
             # Find the start marker (0xAA)
             start_idx = 0
             if buffer[0] != 0xFF or buffer[1] != 0xFF or buffer[2] != 0xFF:

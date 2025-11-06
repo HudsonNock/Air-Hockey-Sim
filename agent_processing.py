@@ -26,7 +26,7 @@ Vmax = 24 * 0.8
 table_bounds = np.array([height, width])
 
 mallet_r = 0.1011 / 2
-margin_bounds = 0.02
+margin_bounds = 0.04
 mallet_bounds = np.array([[margin_bounds + mallet_r, table_bounds[0]/2  - mallet_r/2], [margin_bounds+mallet_r, table_bounds[1]-margin_bounds-mallet_r]])
 
 
@@ -286,7 +286,6 @@ def get_IC(t):
             g_a1[2] = CE[i][0] * ab[i][0]**2 * eatms + CE[i][1] * ab[i][1]**2 * ebtms
         
         tms = t-vt_2[i]
-        print(tms)
         if tms > 0:
             eatms = np.exp(ab[i][0]*tms)
             ebtms = np.exp(ab[i][1]*tms)

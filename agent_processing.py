@@ -85,13 +85,21 @@ del checkpoint
 #policy_module.load_state_dict(torch.load("model_183.pth"), map_location=torch.device("cpu")) #8
 #policy_module.eval()
 
+#pullyR = 0.035755
+#a1 = 2.725e-05 
+#a2 = 7.575e-03  
+#a3 = 6.969e-02 
+#b1 = -1.996e-05 
+#b2 = -2.838e-03 
+#b3 = 3.688e-03 
+
 pullyR = 0.035755
-a1 = 2.725e-05 #7.474*10**(-6) 
-a2 = 7.575e-03 #6.721*10**(-3) 
-a3 = 6.969e-02 #6.658*10**(-2)
-b1 = -1.996e-05 #-1.607*10**(-6)
-b2 = -2.838e-03 #-2.731*10**(-3)
-b3 = 3.688e-03 #3.610*10**(-3)
+a1 = 3.124e-05 
+a2 = 9.974e-03  
+a3 = 9.175e-02 
+b1 = -3.026e-05 
+b2 = -3.803e-03 
+b3 = 1.025e-02 
 
 C1 = [Vmax * pullyR / 2, Vmax * pullyR / 2]
 C5 = [a1-b1, a1+b1]

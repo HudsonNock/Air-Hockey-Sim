@@ -1,8 +1,11 @@
-# Air-Hockey-Sim
+# AI Air Hockey
 
-Currently a WIP
+# Abstract
 
-The goal of this repo is to train and deploy an agent to play air hockey. The air hockey table has been modified to have a coreXY belt configuration allowing the robot to move the mallet.
+Our goal is to deploy a neural network based agent to play air hockey against a human at a professional level. Although we do not have access to a professional air hockey player, the current version already outpreforms all humans that have played against it. To acheive this level of preformance, we designed and statistically modeled the real preformance of the table, including the vision accuracry, motor responses to voltage, timing throughout the firmware, and puck dynamics - while adjusting the electromechanical system so our models become more accurate. Using this model we wrote our own vectorized simulation which runs at 450x real time speed to train a reinforcement learning (RL) agent which was then deployed on the physcial air hockey table.
+
+The first half of the project (8 month period) and its full in depth report is linked below. This covers the simulation design, vision calibrations, and reinforcement learning setup. However, note that much of the content in this final report has since been improved, including the reinforcement learning state space and reward function, as well as puck collision dynamics in the simulation.
+[First Half Final Report](docs/report.pdf)
 
 ![air_hockey_cliponline-video-cutter com-ezgif com-video-to-gif-converter](https://github.com/user-attachments/assets/45868e2b-58df-49db-9185-147e5af6fca6)
 (low framerate due to GIF)

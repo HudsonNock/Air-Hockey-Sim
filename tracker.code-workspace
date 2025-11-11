@@ -1,0 +1,14 @@
+{
+	"folders": [
+		{
+			"path": "."
+		},
+		{
+			"name": "Airhockey_Bluepill_Tests",
+			"path": "../OneDrive/Documents/PlatformIO/Projects/Airhockey_Bluepill_Tests"
+		}
+	],
+	"settings": {
+		"python-envs.defaultEnvManager": "ms-python.python:system"
+	}
+}

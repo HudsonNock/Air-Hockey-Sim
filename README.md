@@ -129,37 +129,33 @@ For a full description of the calibration math, optimization routine, and occlus
 <details>
 <summary>🧩 System ID</summary>
 
-<div style="margin-left: 20px">
-
 - <details>
   <summary>Mallet System ID</summary>
 
   ## Mallet System Identification
 
   To accurately simulate the environment, we needed to model the **mallet and puck dynamics**.  
-  The mallet motion can be characterized as a **third-order transfer function** relating motor voltage to mallet position.
+  The mallet motion can be characterized as a **third-order transfer function** relating motor voltage to mallet position
 
-  $$
-  \begin{array}{c}
-  \begin{bmatrix}
-  V_1 \\
-  V_2
-  \end{bmatrix}
-  =
-  \begin{bmatrix}
-  a_1 & a_2 & a_3 & b_1 & b_2 & b_3 \\
-  b_1 & b_2 & b_3 & a_1 & a_2 & a_3
-  \end{bmatrix}
-  \begin{bmatrix}
-  T_1^{***} \\
-  T_1^{**} \\
-  T_1^{*} \\
-  T_2^{***} \\
-  T_2^{**} \\
-  T_2^{*}
-  \end{bmatrix}
-  \end{array}
-  $$
+   ```math
+   \begin{bmatrix}
+   V_1 \\
+   V_2
+   \end{bmatrix}
+   =
+   \begin{bmatrix}
+   a_1 & a_2 & a_3 & b_1 & b_2 & b_3 \\
+   b_1 & b_2 & b_3 & a_1 & a_2 & a_3
+   \end{bmatrix}
+   \begin{bmatrix}
+   T_1^{***} \\
+   T_1^{**} \\
+   T_1^{*} \\
+   T_2^{***} \\
+   T_2^{**} \\
+   T_2^{*}
+   \end{bmatrix}
+   ```
 
   We can then map this into two SISO systems, with the Cartesian control voltages as:
 
@@ -178,7 +174,7 @@ For a full description of the calibration math, optimization routine, and occlus
   The identification process involved:
   1. Splitting the trajectory data into **short path segments**.  
   2. For each segment, fitting a small polynomial to obtain the initial conditions.  
-  3. Running an optimization over parameters \( a_1, \ldots, b_3 \) to minimize the mean squared error between simulated and measured motion.
+  3. Running an optimization over parameters \( a_1, ..., b_3 \) to minimize the mean squared error between simulated and measured motion.
 
   Only segments with a strong polynomial fit were used in the optimization.
 
@@ -189,10 +185,11 @@ For a full description of the calibration math, optimization routine, and occlus
   With the identified transfer function, we implemented **feedforward control** — generating voltage profiles that would ideally produce a desired mallet trajectory.
   
   However, due to nonlinearities (e.g., friction, backlash, and voltage saturation), the pure feedforward model was insufficient.  
-  We therefore added a **feedback loop**.
+  We therefore added **feedback control** with PID.
   
-  In simulation:
-  - The feedback controller adjusted voltages based on the error between expected and actual position.  
+  To find the optimal feedback coefficients for PID in simulation:
+  - We tuned the PID controller to follow x - x^ (the actual minus expected path) from data collected
+  - Feedback voltages were then mapped to a change in position using the feedforward model previously identified
   - The loop modeled realistic factors such as voltage limits, delay between control updates, and the Blue Pill microcontroller’s control period.
   
   ---
@@ -204,20 +201,19 @@ For a full description of the calibration math, optimization routine, and occlus
   This model forms the foundation of the simulated environment and ensures that reinforcement learning agents experience realistic, physics-based dynamics.
   
   </details>
-  
 
 - <details>
   <summary>Puck System ID</summary>
   
-  ## Puck System Identification
+  ## Puck ODE
 
   To accurately simulate the air hockey environment, we needed to model the puck dynamics and collision behavior.  
   The puck motion can be described by a simple nonlinear ordinary differential equation:
-  
-  $$
-  m \ddot{x} = -f - B \dot{x}^2
-  $$
-  
+
+
+  <p align="center">$m \ddot{x} = -f - B \dot{x}^2$</p>
+
+
   where  
   - \( m \) is the puck mass,  
   - \( f \) represents friction, and  
@@ -282,7 +278,6 @@ For a full description of the calibration math, optimization routine, and occlus
   Together, these models provide a realistic simulation of puck behavior suitable for reinforcement learning and physics-based gameplay.
   </details>
 
-</div>
 </details>
 
 <details>

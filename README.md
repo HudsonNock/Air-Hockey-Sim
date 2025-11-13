@@ -8,16 +8,17 @@ Our goal is to close the sim to real gap and deploy an AI model to successfully 
 
 **Challanges**
 
-To acheive this level of preformance, we designed and statistically modeled the real preformance of the table, including the vision accuracry, motor responses to voltage, timing throughout the firmware, and puck dynamics - while adjusting the electromechanical system so our models become more accurate. Using this model we wrote our own vectorized simulation which runs at 450x real time speed to train a reinforcement learning (RL) agent which was then deployed on the physcial air hockey table.
+To acheive this level of preformance, we designed and statistically modeled the real preformance of the table, including the vision accuracry, motor responses to voltage, timing throughout the firmware, and puck dynamics - while adjusting the electromechanical system so our models become more accurate. Using this model we wrote our own vectorized simulation to train a reinforcement learning (RL) agent which was then deployed on the physcial air hockey table.
 
-Below is a video of the agent playing against itself in the simulation:
+Below is a video of the main agent (Left) playing against a smaller defence agent (Right). The video is taken at 30 fps, but most browsers will display at 15-20 FPS, so in reality it will be moving 1.5-2x faster:
 
+![](docs/195_vid.gif)
 
 **Report and Details**
 
-The first half of the project (the first 8 months) and its full in depth report is linked below. This covers the simulation design, vision calibrations, and reinforcement learning setup. However, note that much of the content in this final report has since been improved, including the reinforcement learning state space and reward function, as well as puck collision dynamics in the simulation.
-[First Half Final Report](docs/2509 - AI Air Hockey - Final Report (PDF).pdf)
+The first half of the project (the first 8 months) and its full in depth report is linked below. This covers the simulation design, vision calibrations, and reinforcement learning setup. However, note that much of the content in this final report has since been improved, including the reinforcement learning state space and reward function, as well as puck collision dynamics modeling and firmware timings.
 
+First Half of Project: [Final Report](docs/2509-AIAirHockey-FinalReport.pdf)
 
 Below we give short outlines for each system, many of the technical details are outlined in the final report.
 

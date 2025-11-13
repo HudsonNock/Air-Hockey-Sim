@@ -10,7 +10,7 @@ Our goal is to close the sim to real gap and deploy an AI model to successfully 
 
 To acheive this level of preformance, we designed and statistically modeled the real preformance of the table, including the vision accuracry, motor responses to voltage, timing throughout the firmware, and puck dynamics - while adjusting the electromechanical system so our models become more accurate. Using this model we wrote our own vectorized simulation to train a reinforcement learning (RL) agent which was then deployed on the physcial air hockey table.
 
-Below is a video of the main agent (Left) playing against a smaller defence agent (Right). The video is taken at 30 fps, but most browsers will display at 15-20 FPS, so in reality it will be moving 1.5-2x faster:
+Below is a video of the main agent (Left) playing against a smaller defence agent (Right).
 
 ![](docs/195_vid.gif)
 

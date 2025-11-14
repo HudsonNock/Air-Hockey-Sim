@@ -37,7 +37,7 @@ The gantry is driven by **two motors with timing belts**, each connected to **mo
 
 During aggressive motions, we observed **power-supply voltage sag**, leading to nonlinear behavior that made the system difficult to model accurately for simulation.  
 To mitigate this, the previous team installed a **165 F supercapacitor** across the power rails to stabilize voltage under load.  
-We later developed and documented a **safety procedure** for capacitor handling — [see here](link).
+We later developed and documented a **safety procedure** for capacitor handling — [see here](https://docs.google.com/presentation/d/1C2lxZXDaFv2uMI581Z3ULeYxlSjX5ojVwfU028PKIhc/edit?usp=sharing).
 
 ---
 
@@ -47,8 +47,7 @@ We later developed and documented a **safety procedure** for capacitor handling 
 
   ![](docs/IMG_20251113_114357875~2.jpg)
   
-  This causes the mallet’s height to vary across the table. Since the mallet is positioned to avoid touching the surface to avoid friction, this bend in the beam makes it possible for the **puck to be trapped under the malelt** when it is on the sides. Rapid belt tension changes also introduce **vertical vibration** and significant **audible noise** as the carriage impacts the table.  
-  *(include image)*
+  This causes the mallet’s height to vary across the table. Since the mallet is positioned to avoid touching the surface to avoid friction, this bend in the beam makes it possible for the **puck to be trapped under the malelt** when it is on the sides. Rapid belt tension changes also introduce **vertical vibration** and significant **audible noise** as the carriage impacts the table.
 
 - **Table is not rectangular** — The table is not a perfect rectangle, with the width changing by around 4 mm. This causes more variation in the puck dynamics as the simulation assumes it is a rectangle.
 
@@ -58,7 +57,8 @@ We later developed and documented a **safety procedure** for capacitor handling 
 
 - **Carriage looseness** — The original carriage was poorly constrained, causing **rattling**.  
   To resolve this, *Ian* redesigned the carriage to constrain all degrees of freedom and added slots for **shim adjustment**, enabling **≈50 µm precision** after 3D printing.  
-  *(include images)*
+
+  ![](docs/new_mallet_carriage.png)
 
 - **Electrical interference** — The electrical system produced large amount of E&M noise, causing **serial communication and motor encoder noise**, resulting in incorrect bytes being transferred. We replaced these with **shielded cables**, eliminating the issue.
 

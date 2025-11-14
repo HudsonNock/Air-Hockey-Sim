@@ -5,6 +5,9 @@
 Our goal is to close the sim to real gap and deploy an AI model to successfully play air hockey against a human. Below is a video of our current progress:
 
 
+System Overview:
+
+![System Diagram:](docs/sld.png)
 
 **Challanges**
 
@@ -16,7 +19,7 @@ Below is a video of the main agent (Left) playing against a smaller defence agen
 
 **Report and Details**
 
-The first half of the project (the first 8 months) and its full in depth report is linked below. This covers the simulation design, vision calibrations, and reinforcement learning setup. However, note that much of the content in this final report has since been improved, including the reinforcement learning state space and reward function, as well as puck collision dynamics modeling and firmware timings.
+The first half of the project (the first 8 months) and its full in depth report is linked below. This covers the simulation design, vision calibrations, and reinforcement learning setup. However, note that much of the content in this final report has since been improved, including the reinforcement learning state space and reward function, as well as puck collision dynamics modeling and firmware.
 
 First Half of Project: [Final Report](docs/2509-AIAirHockey-FinalReport.pdf)
 
@@ -30,7 +33,7 @@ This project is part of a multiyear effort. Our team **inherited the electromech
 The system consists of a **Core-XY gantry** mounted on a custom wooden **air hockey table** (approximately **1 m × 2 m**) that covers half the table’s surface.  
 The gantry is driven by **two motors with timing belts**, each connected to **motor drivers** and controlled via an **STM32 “Blue Pill” microcontroller**. Both motors include **encoders** connected over **SPI** for feedback.
 
-![System Diagram:](docs/sld.png)
+![](docs/IMG_20251113_114419409.jpg)
 
 During aggressive motions, we observed **power-supply voltage sag**, leading to nonlinear behavior that made the system difficult to model accurately for simulation.  
 To mitigate this, the previous team installed a **165 F supercapacitor** across the power rails to stabilize voltage under load.  
@@ -42,7 +45,7 @@ We later developed and documented a **safety procedure** for capacitor handling 
 
 - **Mallet carriage height variation** — The cables attached to the carriage run *above* the sliding beam, creating a bending moment.
 
-  ![System Diagram:](docs/IMG_20251113_114357875~2.jpg)
+  ![](docs/IMG_20251113_114357875~2.jpg)
   
   This causes the mallet’s height to vary across the table. Since the mallet is positioned to avoid touching the surface to avoid friction, this bend in the beam makes it possible for the **puck to be trapped under the malelt** when it is on the sides. Rapid belt tension changes also introduce **vertical vibration** and significant **audible noise** as the carriage impacts the table.  
   *(include image)*
@@ -98,10 +101,22 @@ Previous teams struggled to detect the puck without modifying it (e.g., adding L
 We solved this by applying **retroreflective material** to the puck and mounting a **high-intensity LED array** coaxially with the camera.  
 This setup reflects light directly back to the lens, producing a **high-contrast puck image** even at 100 µs exposure, eliminating motion blur during high-speed play.
 
+Camera View:
+
+![](docs/camera_view.png)
+
+Retroreflective Tape Diagram, visualizing how it reflects light directly back to the source:
+
+![](docs/retroreflective_tape_diagram.png)
+
 ### Camera Calibration
 
-Because the air hockey table was slightly **non-planar**, standard calibration techniques failed.  
-We developed a **multi-view optimization procedure** that simultaneously solved for:
+Standard calibration techniques are to determine the camera's intrinsic matrix and use measured location of ArUco marker position to determine the camera's location and orientation in space. Below is the camera's view where the 6 markers around the edge of the table being the ArUco markers:
+
+![](docs/IMG_20251113_151841704.jpg)
+
+However, as the table is non-planar and large, we can not precisly measure the exact position of the ArUco markers and so standard calibration techniques failed.  
+Instead we developed a **multi-view optimization procedure** that simultaneously solved for:
 - The **3D positions of ArUco markers**, and  
 - The **table surface height**, modeled as a second-order polynomial.  
 
@@ -146,35 +161,13 @@ For a full description of the calibration math, optimization routine, and occlus
   To accurately simulate the environment, we needed to model the **mallet and puck dynamics**.  
   The mallet motion can be characterized as a **third-order transfer function** relating motor voltage to mallet position
 
-   ```math
-   \begin{bmatrix}
-   V_1 \\
-   V_2
-   \end{bmatrix}
-   =
-   \begin{bmatrix}
-   a_1 & a_2 & a_3 & b_1 & b_2 & b_3 \\
-   b_1 & b_2 & b_3 & a_1 & a_2 & a_3
-   \end{bmatrix}
-   \begin{bmatrix}
-   T_1^{***} \\
-   T_1^{**} \\
-   T_1^{*} \\
-   T_2^{***} \\
-   T_2^{**} \\
-   T_2^{*}
-   \end{bmatrix}
-   ```
+  ![](docs/feedforward_eq.png)
 
   We can then map this into two SISO systems, with the Cartesian control voltages as:
 
-  $$
-  V_y = -V_1 - V_2 = \frac{2}{R} \left[ (a_1 + b_1)\dddot{y} + (a_2 + b_2)\ddot{y} + (a_3 + b_3)\dot{y} \right]
-  $$
+  <p align="center">$V_y = -V_1 - V_2 = \frac{2}{R} \left[ (a_1 + b_1)\dddot{y} + (a_2 + b_2)\ddot{y} + (a_3 + b_3)\dot{y} \right]$</p>
 
-  $$
-  V_x = V_1 - V_2 = \frac{2}{R} \left[ (a_1 - b_1)\dddot{x} + (a_2 - b_2)\ddot{x} + (a_3 - b_3)\dot{x} \right]
-  $$
+  <p align="center">$V_x = V_1 - V_2 = \frac{2}{R} \left[ (a_1 - b_1)\dddot{x} + (a_2 - b_2)\ddot{x} + (a_3 - b_3)\dot{x} \right]$</p>
 
   ### Parameter Identification
 
@@ -219,9 +212,7 @@ For a full description of the calibration math, optimization routine, and occlus
   To accurately simulate the air hockey environment, we needed to model the puck dynamics and collision behavior.  
   The puck motion can be described by a simple nonlinear ordinary differential equation:
 
-
   <p align="center">$m \ddot{x} = -f - B \dot{x}^2$</p>
-
 
   where  
   - \( m \) is the puck mass,  
@@ -242,9 +233,14 @@ For a full description of the calibration math, optimization routine, and occlus
   However, the real data exhibited significant variation, suggesting that the normal and tangential components were **not independent**.
   
   To better capture the behavior, we modeled the **output velocity and angle** as a function of the **input velocity and impact angle**.  
-  Since no simple analytical function fit the data well, we instead trained a small neural network with **64 parameters** and **Softplus activations** to approximate the mapping.  
+  Since no simple analytical function fit the data well, we instead trained a small neural network with **64 parameters** and **Softplus activations** to approximate the mapping.
+
+  ![](docs/collision_NN_vel.png)
+  ![](docs/collision_NN_angle.png)
   
   The network also produced **heteroscedastic outputs**, meaning it learned to predict both the expected value and the uncertainty (standard deviation) for each output dimension.
+
+  ![](docs/collision_NN_sigma.png)
   
   ---
   
@@ -275,6 +271,8 @@ For a full description of the calibration math, optimization routine, and occlus
   
   Since we could not experimentally capture high-velocity collisions, we augmented the dataset with **synthetic extrapolated samples** at higher speeds.  
   This ensured that the simulation remained stable and physically reasonable even in scenarios that extended beyond the training distribution.
+
+  ![](docs/collision_NN_out_of_dist.png)
   
   ---
   

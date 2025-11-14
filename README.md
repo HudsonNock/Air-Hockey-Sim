@@ -30,6 +30,8 @@ This project is part of a multiyear effort. Our team **inherited the electromech
 The system consists of a **Core-XY gantry** mounted on a custom wooden **air hockey table** (approximately **1 m × 2 m**) that covers half the table’s surface.  
 The gantry is driven by **two motors with timing belts**, each connected to **motor drivers** and controlled via an **STM32 “Blue Pill” microcontroller**. Both motors include **encoders** connected over **SPI** for feedback.
 
+![System Diagram:](docs/sld.png)
+
 During aggressive motions, we observed **power-supply voltage sag**, leading to nonlinear behavior that made the system difficult to model accurately for simulation.  
 To mitigate this, the previous team installed a **165 F supercapacitor** across the power rails to stabilize voltage under load.  
 We later developed and documented a **safety procedure** for capacitor handling — [see here](link).
@@ -38,8 +40,11 @@ We later developed and documented a **safety procedure** for capacitor handling 
 
 ### ⚠️ Mechanical & Electrical Issues
 
-- **Mallet carriage height variation** — The cables attached to the carriage run *above* the sliding beam, creating a bending moment.  
-  This causes the mallet’s height to vary across the table. Since the mallet is positioned to avoid touching the surface to avoid friction, this bend in teh beam makes it possible for the **puck to be trapped under the malelt** when it is on the sides. Rapid belt tension changes also introduce **vertical vibration** and significant **audible noise** as the carriage impacts the table.  
+- **Mallet carriage height variation** — The cables attached to the carriage run *above* the sliding beam, creating a bending moment.
+
+  ![System Diagram:](docs/IMG_20251113_114357875~2.jpg)
+  
+  This causes the mallet’s height to vary across the table. Since the mallet is positioned to avoid touching the surface to avoid friction, this bend in the beam makes it possible for the **puck to be trapped under the malelt** when it is on the sides. Rapid belt tension changes also introduce **vertical vibration** and significant **audible noise** as the carriage impacts the table.  
   *(include image)*
 
 - **Table is not rectangular** — The table is not a perfect rectangle, with the width changing by around 4 mm. This causes more variation in the puck dynamics as the simulation assumes it is a rectangle.

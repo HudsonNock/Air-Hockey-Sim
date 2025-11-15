@@ -4,14 +4,16 @@
 
 Our goal is to close the sim to real gap and deploy an AI model to successfully play air hockey against a human. Below is a video of our current progress:
 
+[![Watch the video](docs/gameplay_video_screenshot.png)](https://www.youtube.com/watch?v=75mm_B950PQ)
+
 
 System Overview:
 
 ![System Diagram:](docs/sld.png)
 
-**Challanges**
+**Challenges**
 
-To acheive this level of preformance, we designed and statistically modeled the real preformance of the table, including the vision accuracry, motor responses to voltage, timing throughout the firmware, and puck dynamics - while adjusting the electromechanical system so our models become more accurate. Using this model we wrote our own vectorized simulation to train a reinforcement learning (RL) agent which was then deployed on the physcial air hockey table.
+To achieve this level of performance, we designed and statistically modeled the real performance of the table, including the vision accuracy, motor responses to voltage, timing throughout the firmware, and puck dynamics - while adjusting the electromechanical system so our models become more accurate. Using this model we wrote our own vectorized simulation to train a reinforcement learning (RL) agent which was then deployed on the physical air hockey table.
 
 Below is a video of the main agent (Left) playing against a smaller defence agent (Right).
 
@@ -51,7 +53,7 @@ We later developed and documented a **safety procedure** for capacitor handling 
 
 - **Table is not rectangular** — The table is not a perfect rectangle, with the width changing by around 4 mm. This causes more variation in the puck dynamics as the simulation assumes it is a rectangle.
 
-- **Table flatness** — The table surface itself is not perfectly flat, complicating **camera calibration** and essentuating the problem with the mallet carriage height variation.
+- **Table flatness** — The table surface itself is not perfectly flat, complicating **camera calibration** and accentuating the problem with the mallet carriage height variation.
 
 - **Wooden walls** — The table’s walls are made of wood rather than plastic, producing **high variance** in measured collision dynamics with location dependence. We noticed the wood also increases the chance of **puck ejection**.
 
@@ -111,16 +113,16 @@ Retroreflective Tape Diagram, visualizing how it reflects light directly back to
 
 ### Camera Calibration
 
-Standard calibration techniques are to determine the camera's intrinsic matrix and use measured location of ArUco marker position to determine the camera's location and orientation in space. Below is the camera's view where the 6 markers around the edge of the table being the ArUco markers:
+Standard calibration techniques are to determine the camera's intrinsic matrix and use the measured location of ArUco marker position to determine the camera's location and orientation in space. Below is the camera's view where the 6 markers around the edge of the table being the ArUco markers:
 
 ![](docs/IMG_20251113_151841704.jpg)
 
-However, as the table is non-planar and large, we can not precisly measure the exact position of the ArUco markers and so standard calibration techniques failed.  
+However, as the table is non-planar and large, we can not precisely measure the exact position of the ArUco markers and so standard calibration techniques failed.  
 Instead we developed a **multi-view optimization procedure** that simultaneously solved for:
 - The **3D positions of ArUco markers**, and  
 - The **table surface height**, modeled as a second-order polynomial.  
 
-Once the optimization proceedure was complete, we could then place the camera anywhere we desired and run a standard calibration technique to get the projection matrix. This approach enabled accurate mapping from image coordinates to real-world positions, achieving **~1 mm mean error** across the table. 
+Once the optimization procedure was complete, we could then place the camera anywhere we desired and run a standard calibration technique to get the projection matrix. This approach enabled accurate mapping from image coordinates to real-world positions, achieving **~1 mm mean error** across the table. 
 
 ### Puck Tracking and Occlusion Handling
 
@@ -619,3 +621,4 @@ Traditional simulations use fixed `dt` timesteps, creating a trade-off between p
   </details>
 
 </details>
+

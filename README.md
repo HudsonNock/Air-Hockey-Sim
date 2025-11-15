@@ -1,4 +1,4 @@
-**AI Air Hockey**
+# AI Air Hockey
 
 **Project Goal**
 
@@ -28,9 +28,9 @@ Below we give short outlines for each system, many of the technical details are 
 <details>
 <summary>⚙️ Electro-Mechanical System</summary>
 
-This project is part of a multiyear effort. Our team **inherited the electromechanical subsystem** from the previous group — this was the only major component we retained — though we made several adjustments and improvements.
+This project is part of a multiyear effort. Our team **inherited the electromechanical subsystem** from the previous group (this was the only major component we retained) though we made several adjustments and improvements.
 
-The system consists of a **Core-XY gantry** mounted on a custom wooden **air hockey table** (approximately **1 m × 2 m**) that covers half the table’s surface.  
+The system consists of a **Core-XY gantry** mounted on a custom wooden air hockey table (approximately **1 m × 2 m**) that covers half the table’s surface.  
 The gantry is driven by **two motors with timing belts**, each connected to **motor drivers** and controlled via an **STM32 “Blue Pill” microcontroller**. Both motors include **encoders** connected over **SPI** for feedback.
 
 ![](docs/IMG_20251113_114419409.jpg)
@@ -47,16 +47,16 @@ We later developed and documented a **safety procedure** for capacitor handling 
 
   ![](docs/IMG_20251113_114357875~2.jpg)
   
-  This causes the mallet’s height to vary across the table. Since the mallet is positioned to avoid touching the surface to avoid friction, this bend in the beam makes it possible for the **puck to be trapped under the malelt** when it is on the sides. Rapid belt tension changes also introduce **vertical vibration** and significant **audible noise** as the carriage impacts the table.
+  This causes the mallet’s height to vary across the table. Since the mallet is positioned to avoid touching the surface to avoid friction, this bend in the beam makes it possible for the **puck to be trapped under the mallet**. Rapid belt tension changes also introduce **vertical vibration** and significant **audible noise** as the carriage impacts the table.
 
 - **Table is not rectangular** — The table is not a perfect rectangle, with the width changing by around 4 mm. This causes more variation in the puck dynamics as the simulation assumes it is a rectangle.
 
 - **Table flatness** — The table surface itself is not perfectly flat, complicating **camera calibration** and essentuating the problem with the mallet carriage height variation.
 
-- **Wooden walls** — The table’s walls are made of wood rather than plastic, producing **a high variance in measured collision dynamics** with location dependence. We noticed the wood also increases the chance of **puck ejection**.
+- **Wooden walls** — The table’s walls are made of wood rather than plastic, producing **high variance** in measured collision dynamics with location dependence. We noticed the wood also increases the chance of **puck ejection**.
 
 - **Carriage looseness** — The original carriage was poorly constrained, causing **rattling**.  
-  To resolve this, *Ian* redesigned the carriage to constrain all degrees of freedom and added slots for **shim adjustment**, enabling **≈50 µm precision** after 3D printing.  
+  To resolve this, Ian redesigned the carriage to constrain all degrees of freedom and added slots for **shim adjustment**, enabling **≈50 µm precision** after 3D printing.  
 
   ![](docs/new_mallet_carriage.png)
 
@@ -171,7 +171,7 @@ For a full description of the calibration math, optimization routine, and occlus
 
   ### Parameter Identification
 
-  Using encoder data for position and measured voltages \( V_x, V_y \), we performed parameter identification in MATLAB.
+  Using encoder data for position and measured voltages \( V_x, V_y \), we performed parameter identification in MATLAB. The code for this section was written by Mauro.
 
   The identification process involved:
   1. Splitting the trajectory data into **short path segments**.  
@@ -219,7 +219,7 @@ For a full description of the calibration math, optimization routine, and occlus
   - \( f \) represents friction, and  
   - \( B \) is a drag coefficient term related to air resistance.
   
-  We fit this model to the motion data obtained from tracking the puck. The parameters were estimated using nonlinear regression to minimize the mean squared error between the observed and predicted trajectories.
+  We fit this model to the motion data obtained from tracking the puck. The parameters were estimated using nonlinear regression to minimize the mean squared error between the observed and predicted trajectories. The optimization code here was written by Ian.
 
   ---
   
@@ -233,7 +233,7 @@ For a full description of the calibration math, optimization routine, and occlus
   However, the real data exhibited significant variation, suggesting that the normal and tangential components were **not independent**.
   
   To better capture the behavior, we modeled the **output velocity and angle** as a function of the **input velocity and impact angle**.  
-  Since no simple analytical function fit the data well, we instead trained a small neural network with **64 parameters** and **Softplus activations** to approximate the mapping.
+  Since no simple analytical function fit the data well, we instead trained a small neural network with **112 parameters** and **Softplus activations** to approximate the mapping.
 
   ![](docs/collision_NN_vel.png)
   ![](docs/collision_NN_angle.png)
@@ -253,11 +253,8 @@ For a full description of the calibration math, optimization routine, and occlus
   
   For each mallet collision:
   - The mallet trajectory was fitted using a polynomial within a 30 ms window.  
-  - The exact contact point was found by minimizing  
-    $$
-    \| P_\text{puck} - P_\text{mallet} \| - (r_\text{puck} + r_\text{mallet})
-    $$
-    where \( P_\text{puck} \) and \( P_\text{mallet} \) are positions, and \( r_\text{puck} \), \( r_\text{mallet} \) are radii.
+  - The exact contact point was found by minimizing
+    <p align="center">$| \| P_\text{puck} - P_\text{mallet} \| - (r_\text{puck} + r_\text{mallet}) |$</p>
   
   We then transformed all collision data into the **mallet frame of reference** and computed:
   - Incoming velocity and angle  
@@ -324,7 +321,7 @@ The camera streams BayerRG8 format with a reduced ROI to achieve 120 fps without
 
 Accurate delay measurement is critical for the simulation. Rather than measuring individual one-way delays (which requires clock synchronization), we use **round-trip timing**. The central idea here is not to measure the information delay from the event to when the neural network receives it, but instead the delay from the event to the neural networks action being preformed. In simulation, we can then treat the neural networks action as having no delay and set the information delay as the round trip delay.
 
-### Neural Network Delay
+### Mallet Delay
 1. Blue Pill sends current timestamp (instead of dt)
 2. Laptop processes through NN and path planning
 3. Laptop echoes timestamp back in path variables
@@ -335,7 +332,7 @@ Accurate delay measurement is critical for the simulation. Rather than measuring
 2. Laptop detects LED brightness in frame
 3. Laptop processes preloaded table frame through entire pipeline
 4. Blue Pill receives command and calculates delay
-5. Result: Uniform distribution over (delay+[0, 1/120s]), where the lower bound is the actual camera delay
+5. Result: Uniform distribution over (delay+[0, 1/120s]), where the lower bound is the actual camera information delay
 
 All timing measurements include mean, standard deviation, min, and max values.
 
@@ -376,7 +373,7 @@ Mallets move along paths defined by initial conditions, desired final position, 
 
 <p align="center">$V_x(t) = M_{V_x} u(t) - 2M_{V_x} u(t-t_1) + M_{V_x} u(t-t_2)$</p>
 
-Given the final position and system parameters, we solve for `t₁` and `t₂` to minimize overshoot and converge to xf. This formulation guarantees:
+Given the final position and system parameters, we solve for `t₁` and `t₂` to minimize overshoot and converge to the final position, xf. This formulation guarantees:
 - All generated paths are physically achievable within system constraints
 - The mallet never collides with walls
 - The ODE has an analytic solution which is preprogramed and so no compute is used solving it
@@ -439,15 +436,15 @@ Traditional simulations use fixed `dt` timesteps, creating a trade-off between p
   - **Previous action**: Ensures the MDP is fully defined, as `previous_action + past_position` determines current position
   
   ### Domain Parameters
-  Current system identification coefficients `(a₁, a₂, a₃, b₁, b₂, b₃)` being used. These are included because they vary across training domains (see Domain Randomization section).
+  Current system identification coefficients `(a₁, a₂, a₃, b₁, b₂, b₃)` being used (see system id section). These are included because they vary across training domains (see Domain Randomization section).
   
   ## Action Space
   
   The agent outputs three continuous values:
   
   - **`xf`**: Desired final mallet position
-  - **`Vx`**: Voltage parameter for x-axis motion
-  - **`Vy`**: Voltage parameter for y-axis motion
+  - **`M_{V_x}`**: Voltage parameter for x-axis motion
+  - **`M_{V_y}`**: Voltage parameter for y-axis motion
   
   These define a trajectory as described in the Simulation Implementation section, guaranteeing physically feasible paths within system constraints.
   
@@ -467,9 +464,9 @@ Traditional simulations use fixed `dt` timesteps, creating a trade-off between p
   1. **Rollout Simulation**: Perform Monte Carlo estimation with 20 rollouts, assuming the opponent remains stationary
   2. **Reward Calculation**: 
      ```
-     reward = E[success] × (10 + puck_velocity)
+     reward = E[success] × (20 + puck_velocity/2)
      ```
-     where `E[success]` is the expected probability of scoring from the rollouts
+     where `E[success]` is the expected probability of scoring from the rollouts assuming the opponent does not move.
   3. **Episode Termination**: Episode ends when puck crosses halfway, but simulation continues without reset
   
   **Benefits**:
@@ -493,7 +490,7 @@ Traditional simulations use fixed `dt` timesteps, creating a trade-off between p
   To ensure robust performance, the agent trains against multiple opponent types:
   
   #### 1. Random Positional Agent
-  - Selects a random area of the table
+  - Selects a random area of the table (weighted towards the goal)
   - Moves randomly within that region
   - Provides unpredictable, non-strategic behavior
   

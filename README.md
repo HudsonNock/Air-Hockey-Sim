@@ -378,7 +378,7 @@ Mallets move along paths defined by initial conditions, desired final position, 
 Given the final position and system parameters, we solve for `t₁` and `t₂` to minimize overshoot and converge to the final position, xf. This formulation guarantees:
 - All generated paths are physically achievable within system constraints
 - The mallet never collides with walls
-- The ODE has an analytic solution which is preprogramed and so no compute is used solving it
+- The ODE has an analytic solution which is preprogramed and so no compute is used solving it (this is one strong reason to code our own simulation compared to using a pre-existing one)
 
 ### Puck Dynamics
 As derived in the System Identification section, puck motion satisfies a differential equation with a closed-form solution. Both mallet and puck positions are expressed as **explicit functions of time**—no iterative solvers required.

@@ -147,7 +147,7 @@ def collect_data():
     target = np.array([0.5, 0.5, 15.0, 15.0, 0.02])
     mask = ~np.all(action_commands == target, axis=1)
     action_commands = action_commands[mask]
-    action_commands = action_commands[100:400]
+    action_commands = action_commands[100:300]
 
     
     PORT = '/dev/ttyUSB0'  # Adjust this to COM port or /dev/ttyUSBx
@@ -333,7 +333,7 @@ def collect_data():
             #print(pwms)
             #print("------")
             #print(dts)
-            with open("mallet_data_NN_paths3.csv", "w", newline="") as f:
+            with open("mallet_data_NN_paths4.csv", "w", newline="") as f:
                 writer = csv.writer(f)
                 # Write header
                 writer.writerow(["x", "y", "Expected_x", "Expected_y", "pwm_x", "pwm_y", "dt"])

@@ -147,7 +147,7 @@ def collect_data():
     target = np.array([0.5, 0.5, 15.0, 15.0, 0.02])
     mask = ~np.all(action_commands == target, axis=1)
     action_commands = action_commands[mask]
-    action_commands = action_commands[100:300]
+    action_commands = action_commands[100:110]
 
     
     PORT = '/dev/ttyUSB0'  # Adjust this to COM port or /dev/ttyUSBx
@@ -238,7 +238,7 @@ def collect_data():
     while True:
         # Read entire buffer
         
-        if time.perf_counter() - t1 > action_commands[action_idx, 4]:
+        if time.perf_counter() - t1 > 0.5: #action_commands[action_idx, 4]:
             time_passed = time.perf_counter() - t1
             t1 = time.perf_counter()
             

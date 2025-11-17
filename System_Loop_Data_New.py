@@ -497,14 +497,21 @@ def system_loop(cam, load, pro):
     ap.pullyR = pully_R
     ap.C1 = [ap.Vmax * ap.pullyR / 2, ap.Vmax * ap.pullyR / 2]
     
-    a1 = 7.474*10**(-6) #3.579*10**(-6)
-    a2 = 7.575e-03 #6.721*10**(-3) 
-    a3 = 6.969e-02
-    b1 = -1.607*10**(-6) #-1.7165*10**(-6)
-    b2 = -2.838e-03 #-2.731*10**(-3)
-    b3 = 3.688e-03
+    #a1 = 7.474*10**(-6) #3.579*10**(-6)
+    #a2 = 7.575e-03 #6.721*10**(-3) 
+    #a3 = 6.969e-02
+    #b1 = -1.607*10**(-6) #-1.7165*10**(-6)
+    #b2 = -2.838e-03 #-2.731*10**(-3)
+    #b3 = 3.688e-03
     
-    obs[-6:] = np.array([a1/ap.pullyR * 1e4, a2/ap.pullyR * 1e1, a3/ap.pullyR * 1e0, (-6.5e-06)/ap.pullyR * 1e4, b2/ap.pullyR * 1e1, b3/ap.pullyR * 1e1]) * 1.1
+    a1 = 10.0e-06 
+    a2 = 9.974e-03  
+    a3 = 9.175e-02 
+    b1 = -9.3e-06 
+    b2 = -3.8e-03 
+    b3 = 7.3e-03 
+    
+    obs[-6:] = np.array([a1/ap.pullyR * 1e4, a2/ap.pullyR * 1e1, a3/ap.pullyR * 1e0, b1/ap.pullyR * 1e4, b2/ap.pullyR * 1e1, b3/ap.pullyR * 1e1])
     
     ser.reset_input_buffer()
     
@@ -633,7 +640,7 @@ def system_loop(cam, load, pro):
         get_mallet(ser)
     #timer = time.perf_counter()
     
-    recording_data = np.zeros([5000, 7])
+    recording_data = np.zeros([20000, 7])
     action_commands = np.full((3000,5), np.array([0.5, 0.5, 15, 15, 0.02]))
     idx = 0
     timer = time.perf_counter()
@@ -671,7 +678,7 @@ def system_loop(cam, load, pro):
         idx += 1
         
         if idx == len(recording_data):
-            with open("system_loop_data_N6.csv", "w", newline="") as f:
+            with open("system_loop_data_N7.csv", "w", newline="") as f:
                 writer = csv.writer(f)
                 # Write header
                 writer.writerow(["Px", "Py", "Mx", "My", "Mxv", "Myv", "dt"])
@@ -680,7 +687,7 @@ def system_loop(cam, load, pro):
                 for i in range(len(recording_data)):
                     writer.writerow([recording_data[i, 0], recording_data[i, 1], recording_data[i, 2], recording_data[i, 3], recording_data[i, 4], recording_data[i,5], recording_data[i,6]])
             print("SIGNAL END")
-            np.save('actions.npy', action_commands)
+            #np.save('actions.npy', action_commands)
             break
             
             
@@ -705,7 +712,7 @@ def system_loop(cam, load, pro):
         
         obs[28:32] = action
         #print(action)
-        no_update_bounds = 0.02
+        no_update_bounds = 0.01
         no_update = (np.linalg.norm(obs[20:22] - obs[24:26]) < no_update_bounds) and (np.linalg.norm(obs[28:30] - action[:2]) < no_update_bounds) and (np.linalg.norm(action[:2] - obs[20:22]) < no_update_bounds)
         
         if not no_update:
@@ -775,7 +782,7 @@ def system_loop(cam, load, pro):
         idx += 1
         
         if idx == len(recording_data):
-            with open("system_loop_data_N6.csv", "w", newline="") as f:
+            with open("system_loop_data_N7.csv", "w", newline="") as f:
                 writer = csv.writer(f)
                 # Write header
                 writer.writerow(["Px", "Py", "Mx", "My", "Mxv", "Myv", "dt"])
@@ -785,7 +792,7 @@ def system_loop(cam, load, pro):
                     writer.writerow([recording_data[i, 0], recording_data[i, 1], recording_data[i, 2], recording_data[i, 3], recording_data[i, 4], recording_data[i,5], recording_data[i,6]])
             print("SIGNAL END")
             
-            np.save('actions.npy', action_commands)
+            #np.save('actions.npy', action_commands)
             break
             
             

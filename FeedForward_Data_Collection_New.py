@@ -333,7 +333,7 @@ def collect_data():
             #print(pwms)
             #print("------")
             #print(dts)
-            with open("mallet_data_NN_paths4.csv", "w", newline="") as f:
+            with open("mallet_data_NN_paths5.csv", "w", newline="") as f:
                 writer = csv.writer(f)
                 # Write header
                 writer.writerow(["x", "y", "Expected_x", "Expected_y", "pwm_x", "pwm_y", "dt"])

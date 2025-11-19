@@ -147,7 +147,7 @@ def collect_data():
     target = np.array([0.5, 0.5, 15.0, 15.0, 0.02])
     mask = ~np.all(action_commands == target, axis=1)
     action_commands = action_commands[mask]
-    action_commands = action_commands[100:]
+    action_commands = action_commands[100:500]
 
     
     PORT = '/dev/ttyUSB0'  # Adjust this to COM port or /dev/ttyUSBx
@@ -210,7 +210,7 @@ def collect_data():
         pos, vel, acc, passed = get_mallet(ser)
             
     xf = np.array([0.7, 0.5])
-    Vo = np.array([5, 5]) #np.array([15, 13])
+    Vo = np.array([15, 13])
     
     data = ap.update_path(pos, vel, acc, xf, Vo)
     ser.write(b'\n' + data + b'\n')
@@ -238,7 +238,7 @@ def collect_data():
     while True:
         # Read entire buffer
         
-        if time.perf_counter() - t1 > action_commands[action_idx, 4]:
+        if time.perf_counter() - t1 > 0.5: #action_commands[action_idx, 4]:
             time_passed = time.perf_counter() - t1
             t1 = time.perf_counter()
             
@@ -255,7 +255,7 @@ def collect_data():
             if action_idx == len(action_commands):
                 print("END OF ACTIONS")
                 signal_end = True
-            #Vo = np.array([12,12])
+            #Vo = np.array([10,10])
             #delay = 0.02 #np.random.random() * 0.1 + 0.02 #0.3 + 0.2
             
             pos_ic, vel_ic, acc_ic = ap.get_IC(time_passed)
@@ -307,7 +307,8 @@ def collect_data():
             if c != chk:
                 print("bad checksum")
 
-            pos[idx, :] = np.array([deq(p0, -0.5, 2), deq(p1, -0.5, 2)])
+            print(f"{p0 & 0xFFFF:016b}")
+            #print(f"{p1 & 0xFFFF:016b})
             exp_pos[idx, :] = np.array([deq(ep0, -0.5, 2), deq(ep1, -0.5, 2)])
             pwms[idx,:] = np.array([deq(pwm0, -1.1, 1.1), deq(pwm1, -1.1, 1.1)])
             dts[idx] = deq(dt, 0, 3)
@@ -324,25 +325,6 @@ def collect_data():
             if idx == sample_len:
                 signal_end = True
                 break
-            
-                
-        if signal_end:
-            #print("------")
-            #print(pos)
-            #print("------")
-            #print(pwms)
-            #print("------")
-            #print(dts)
-            with open("mallet_data_NN_paths8.csv", "w", newline="") as f:
-                writer = csv.writer(f)
-                # Write header
-                writer.writerow(["x", "y", "Expected_x", "Expected_y", "pwm_x", "pwm_y", "dt"])
-                
-                # Write rows
-                for p, ep, pwm, dt in zip(pos, exp_pos, pwms, dts):
-                    writer.writerow([p[0], p[1], ep[0], ep[1], pwm[0], pwm[1], dt])
-            print("SIGNAL END")
-            break
                 
             
     #except Exception as e:

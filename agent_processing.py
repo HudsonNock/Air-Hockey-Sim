@@ -79,7 +79,7 @@ policy_module = ProbabilisticActor(
 # Vx + Vy < 2*(Vmax)
 # sqrt(2* (2*Vmax)^2)
 
-checkpoint = torch.load("model_192.pth", map_location="cpu")
+checkpoint = torch.load("model_202.pth", map_location="cpu")
 policy_module.load_state_dict(checkpoint['policy_state_dict'])
 del checkpoint
 #policy_module.load_state_dict(torch.load("model_183.pth"), map_location=torch.device("cpu")) #8

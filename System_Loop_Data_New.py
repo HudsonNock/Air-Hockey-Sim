@@ -641,7 +641,7 @@ def system_loop(cam, load, pro):
     #timer = time.perf_counter()
     
     recording_data = np.zeros([20000, 7])
-    action_commands = np.full((3000,5), np.array([0.5, 0.5, 15, 15, 0.02]))
+    action_commands = np.full((1200,5), np.array([0.5, 0.5, 15, 15, 0.02]))
     idx = 0
     timer = time.perf_counter()
     left_hysteresis = False
@@ -678,6 +678,7 @@ def system_loop(cam, load, pro):
         idx += 1
         
         if idx == len(recording_data):
+            """
             with open("system_loop_data_N7.csv", "w", newline="") as f:
                 writer = csv.writer(f)
                 # Write header
@@ -687,7 +688,8 @@ def system_loop(cam, load, pro):
                 for i in range(len(recording_data)):
                     writer.writerow([recording_data[i, 0], recording_data[i, 1], recording_data[i, 2], recording_data[i, 3], recording_data[i, 4], recording_data[i,5], recording_data[i,6]])
             print("SIGNAL END")
-            #np.save('actions.npy', action_commands)
+            """
+            np.save('actions_oldp.npy', action_commands)
             break
             
             
@@ -754,6 +756,12 @@ def system_loop(cam, load, pro):
             timer1 = time.perf_counter()
             pos, vel, acc = ap.get_IC(time_passed)
             
+            if int(idx / 2) == len(action_commands):
+                print("SIGNAL END")
+                        
+                np.save('actions_overhead.npy', action_commands)
+                break
+            
             action_commands[int(idx / 2), :2] = xf
             action_commands[int(idx / 2), 2:4] = Vo
             action_commands[int(idx / 2), 4] = time_passed
@@ -782,6 +790,7 @@ def system_loop(cam, load, pro):
         idx += 1
         
         if idx == len(recording_data):
+            """
             with open("system_loop_data_N7.csv", "w", newline="") as f:
                 writer = csv.writer(f)
                 # Write header
@@ -790,9 +799,10 @@ def system_loop(cam, load, pro):
                 # Write rows
                 for i in range(len(recording_data)):
                     writer.writerow([recording_data[i, 0], recording_data[i, 1], recording_data[i, 2], recording_data[i, 3], recording_data[i, 4], recording_data[i,5], recording_data[i,6]])
+            """
             print("SIGNAL END")
-            
-            #np.save('actions.npy', action_commands)
+                        
+            np.save('actions_oldp.npy', action_commands)
             break
             
             

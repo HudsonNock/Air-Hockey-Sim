@@ -143,11 +143,7 @@ def collect_data():
     # Disable garbage collection during measurement
     #try:
     
-    action_commands = np.load('actions_overhead.npy')
-    #target = np.array([0.5, 0.5, 15.0, 15.0, 0.02])
-    #mask = ~np.all(action_commands == target, axis=1)
-    #action_commands = action_commands[mask]
-    #action_commands = action_commands[100:]
+    action_commands = np.load('data/actions_newp.npy')
 
     
     PORT = '/dev/ttyUSB0'  # Adjust this to COM port or /dev/ttyUSBx
@@ -333,10 +329,10 @@ def collect_data():
             #print(pwms)
             #print("------")
             #print(dts)
-            with open("mallet_data_overhead_supercap.csv", "w", newline="") as f:
+            with open("data/mallet_data_newp.csv", "w", newline="") as f:
                 writer = csv.writer(f)
                 # Write header
-                writer.writerow(["x", "y", "Expected_x", "Expected_y", "pwm_x", "pwm_y", "dt"])
+                writer.writerow(["x", "y", "Expected_x", "Expected_y", "Left_PWM", "Right_PWM", "dt"])
                 
                 # Write rows
                 for p, ep, pwm, dt in zip(pos, exp_pos, pwms, dts):

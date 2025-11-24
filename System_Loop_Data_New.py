@@ -643,6 +643,7 @@ def system_loop(cam, load, pro):
     recording_data = np.zeros([20000, 7])
     action_commands = np.full((1200,5), np.array([0.5, 0.5, 15, 15, 0.02]))
     idx = 0
+    action_idx = 0
     timer = time.perf_counter()
     left_hysteresis = False
     symmetry = False
@@ -689,7 +690,7 @@ def system_loop(cam, load, pro):
                     writer.writerow([recording_data[i, 0], recording_data[i, 1], recording_data[i, 2], recording_data[i, 3], recording_data[i, 4], recording_data[i,5], recording_data[i,6]])
             print("SIGNAL END")
             """
-            np.save('actions_oldp.npy', action_commands)
+            np.save('actions_newp.npy', action_commands)
             break
             
             
@@ -756,15 +757,17 @@ def system_loop(cam, load, pro):
             timer1 = time.perf_counter()
             pos, vel, acc = ap.get_IC(time_passed)
             
-            if int(idx / 2) == len(action_commands):
-                print("SIGNAL END")
+            if action_idx == len(action_commands):
+                print("SIGNAL END ACTION")
                         
-                np.save('actions_overhead.npy', action_commands)
+                np.save('actions_newp.npy', action_commands)
                 break
             
-            action_commands[int(idx / 2), :2] = xf
-            action_commands[int(idx / 2), 2:4] = Vo
-            action_commands[int(idx / 2), 4] = time_passed
+            action_commands[action_idx, :2] = xf
+            action_commands[action_idx, 2:4] = Vo
+            action_commands[action_idx, 4] = time_passed
+            
+            action_idx += 1
 
             #new_pos = pos + vel * dt + 0.5 * acc * dt**2
             #new_vel = vel + acc * dt
@@ -802,7 +805,7 @@ def system_loop(cam, load, pro):
             """
             print("SIGNAL END")
                         
-            np.save('actions_oldp.npy', action_commands)
+            np.save('actions_newp.npy', action_commands)
             break
             
             

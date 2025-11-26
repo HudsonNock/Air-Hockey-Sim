@@ -690,7 +690,7 @@ def system_loop(cam, load, pro):
                     writer.writerow([recording_data[i, 0], recording_data[i, 1], recording_data[i, 2], recording_data[i, 3], recording_data[i, 4], recording_data[i,5], recording_data[i,6]])
             print("SIGNAL END")
             """
-            np.save('data/actions_overhead.npy', action_commands)
+            np.save('data/actions_newp2.npy', action_commands)
             break
             
             
@@ -760,7 +760,7 @@ def system_loop(cam, load, pro):
             if action_idx == len(action_commands):
                 print("SIGNAL END ACTION")
                         
-                np.save('data/actions_overhead.npy', action_commands)
+                np.save('data/actions_newp2.npy', action_commands)
                 break
             
             action_commands[action_idx, :2] = xf
@@ -805,7 +805,7 @@ def system_loop(cam, load, pro):
             """
             print("SIGNAL END")
                         
-            np.save('data/actions_overhead.npy', action_commands)
+            np.save('data/actions_newp2.npy', action_commands)
             break
             
             

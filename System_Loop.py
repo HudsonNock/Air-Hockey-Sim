@@ -18,21 +18,21 @@ from tensordict import TensorDict
 import torch
 import agent_processing as ap
 import argparse
+import csv
 
 torch.set_num_threads(2)
 torch.set_num_interop_threads(1)
 
 table_bounds = np.array([1.993, 0.992])
-obs_dim = 51
+obs_dim = 38
 obs = np.zeros((obs_dim,), dtype=np.float32)
-obs[32:32+14] = np.array([[0.75, 0.01, 0.7, 0.7, 0.01, 0.65, 0.02, 0.8, 0.01, 0.75, 0.74, 0.01, 0.73, 0.02]])
-#obs[32+7:32+14] = np.array([0.8, 0.3, 0.6, 0.7, 0.2, 0.4, 0.03]) #mallet res
-obs[32+14:] = np.array([ap.a1/ap.pullyR * 1e4, ap.a2/ap.pullyR * 1e1, ap.a3/ap.pullyR * 1e0, ap.b1/ap.pullyR * 1e4, ap.b2/ap.pullyR * 1e1])
-obs[32+14:] *= 1.2
-#e_n0, e_nr, e_nf, e_t0, e_tr, e_tf, std
+obs[-6:] = np.array([ap.a1/ap.pullyR * 1e4, ap.a2/ap.pullyR * 1e1, ap.a3/ap.pullyR * 1e0, ap.b1/ap.pullyR * 1e4, ap.b2/ap.pullyR * 1e1, ap.b3/ap.pullyR * 1e1])
+obs[-3] = (-6.5e-06)/ap.pullyR * 1e4
 
-margin = 0.03
-margin_bottom = 0.03
+obs_flip = np.empty((obs_dim), dtype=np.float32)
+
+margin = 0.05
+margin_bottom = 0.05
 
 mallet_r = 0.1011 / 2
 puck_r = 0.0629 / 2
@@ -389,8 +389,10 @@ def get_init_conditions(pred=0):
     
     t = ts[-1] + pred
     
-    pos = np.array([coef_x[0]*t**2 + coef_x[1]*t + coef_x[2], \
-                    coef_y[0]*t**2 + coef_y[1]*t + coef_y[2]])
+    pos = np.array([coef_x[1]*t + coef_x[2], \
+                    coef_y[1]*t + coef_y[2]])
+                    #np.array([coef_x[0]*t**2 + coef_x[1]*t + coef_x[2], \
+                    #coef_y[0]*t**2 + coef_y[1]*t + coef_y[2]])
                     
     vel = np.array([2*coef_x[0]*t + coef_x[1], \
                     2*coef_y[0]*t + coef_y[1]])
@@ -399,6 +401,16 @@ def get_init_conditions(pred=0):
                     2*coef_y[0]])
                     
     return pos, vel, acc
+    
+def apply_symmetry(t_obs):
+    obs_flip[:] = t_obs
+    obs_flip[1:22:2] = table_bounds[1] - obs_flip[1:22:2]
+    obs_flip[23] *= -1
+    obs_flip[27] *= -1
+    obs_flip[25] = table_bounds[1] - obs_flip[25]
+    obs_flip[29] = table_bounds[1] - obs_flip[29]
+
+    return obs_flip
     
 
 def system_loop(cam, load, pro):
@@ -419,7 +431,7 @@ def system_loop(cam, load, pro):
         time.sleep(1)
         
         set_pixel_format(cam, mode="Mono8")
-        configure_camera(cam, gain_val=10.0, exposure_val=6000.0)
+        configure_camera(cam, gain_val=1.0, exposure_val=10000.0)
         set_frame_rate(cam, target_fps=20.0)
         
         cam.BeginAcquisition()
@@ -427,13 +439,26 @@ def system_loop(cam, load, pro):
         image = cam.GetNextImage()
         img = image.GetData().reshape(img_shape)
         image.Release()
+            
+        bright_filter = -0.5 * np.arange(1536)[:,None] / 1536 + 1.5
+
+        image = cam.GetNextImage()
+        img = np.clip(image.GetData().reshape(img_shape) * bright_filter, 0, 255).astype(np.uint8)
+        image.Release()
+        
+        #while True:
+        #    cv2.imshow("arucos", img)
+        #    cv2.waitKey(1)
+        #    image = cam.GetNextImage()
+        #    img = image.GetData().reshape(img_shape)
+        #    image.Release()
         
         setup = tracker.SetupCamera()
         while not setup.run_extrinsics(img):
             cv2.imshow("arucos", img[::2, ::2])
             cv2.waitKey(0)
             image = cam.GetNextImage()
-            img = image.GetData().reshape(img_shape)
+            img = np.clip(image.GetData().reshape(img_shape) * bright_filter, 0, 255).astype(np.uint8)
             image.Release()
             
         cv2.destroyAllWindows()
@@ -441,7 +466,7 @@ def system_loop(cam, load, pro):
         cam.EndAcquisition()
         
     set_pixel_format(cam, mode="BayerRG8")
-    configure_camera(cam, gain_val=35.0, exposure_val=100.0)
+    configure_camera(cam, gain_val=33.0, exposure_val=100.0)
     set_frame_rate(cam, target_fps=120.0)
     
     ser.write(b'\n')
@@ -472,7 +497,21 @@ def system_loop(cam, load, pro):
     ap.pullyR = pully_R
     ap.C1 = [ap.Vmax * ap.pullyR / 2, ap.Vmax * ap.pullyR / 2]
     
-    obs[32+14:] = np.array([ap.a1/ap.pullyR * 1e4, ap.a2/ap.pullyR * 1e1, ap.a3/ap.pullyR * 1e0, ap.b1/ap.pullyR * 1e4, ap.b2/ap.pullyR * 1e1])
+    #a1 = 7.474*10**(-6) #3.579*10**(-6)
+    #a2 = 7.575e-03 #6.721*10**(-3) 
+    #a3 = 6.969e-02
+    #b1 = -1.607*10**(-6) #-1.7165*10**(-6)
+    #b2 = -2.838e-03 #-2.731*10**(-3)
+    #b3 = 3.688e-03
+    
+    a1 = 10.0e-06 
+    a2 = 9.974e-03  
+    a3 = 9.175e-02 
+    b1 = -9.3e-06 
+    b2 = -3.8e-03 
+    b3 = 7.3e-03 
+    
+    obs[-6:] = np.array([a1/ap.pullyR * 1e4, a2/ap.pullyR * 1e1, a3/ap.pullyR * 1e0, b1/ap.pullyR * 1e4, b2/ap.pullyR * 1e1, b3/ap.pullyR * 1e1])
     
     ser.reset_input_buffer()
     
@@ -571,6 +610,11 @@ def system_loop(cam, load, pro):
                                   
         del setup
     else:
+        get_mallet(ser)
+        pos, vel, acc = get_init_conditions()
+
+        data = ap.update_path(pos, vel, acc, pos + np.array([0.004,0.005]), np.array([3,3]))
+        
         setup_data = np.load("setup_data.npz")
         track = tracker.CameraTracker(setup_data["rotation_matrix"],
                                       setup_data["translation_vector"],
@@ -595,6 +639,11 @@ def system_loop(cam, load, pro):
     for _ in range(11):
         get_mallet(ser)
     #timer = time.perf_counter()
+    
+    timer = time.perf_counter()
+    left_hysteresis = False
+    symmetry = False
+    timer1 = time.perf_counter()
     while True:
     
         image = cam.GetNextImage()
@@ -605,23 +654,38 @@ def system_loop(cam, load, pro):
         get_mallet(ser)
         pos, vel, acc = get_init_conditions()
             
+        new_time = time.perf_counter()
+        time_diff = new_time - timer
+        timer = new_time
         obs[:20] = track.past_data.get()
         obs[24:26] = obs[20:22] #update past mallet
         obs[26:28] = obs[22:24]
         obs[20:22] = pos #add current mallet pos
         obs[22:24] = vel
         
-        tensor_obs = TensorDict({"observation": torch.tensor(obs, dtype=torch.float32)})
-        #print("--")
-        #print(obs)
-                       
-        with torch.no_grad():
-        	policy_out = ap.policy_module(tensor_obs)
+        if left_hysteresis and obs[0] > table_bounds[0]/2 + 0.1:
+            left_hysteresis = False
+            symmetry = np.random.random() < 0.5
+        elif (not left_hysteresis) and obs[0] < table_bounds[0]/2 - 0.1:
+            left_hysteresis = True
+      
+        if symmetry:
+            tensor_obs = TensorDict({"observation": torch.tensor(obs, dtype=torch.float32)})
+            with torch.no_grad():
+                policy_out = ap.policy_module(tensor_obs)
+            action = policy_out["action"].detach().numpy()
+        else:
+            tensor_obs = TensorDict({"observation": torch.tensor(apply_symmetry(obs), dtype=torch.float32)})
+            with torch.no_grad():
+                policy_out = ap.policy_module(tensor_obs)
+            action = policy_out["action"].detach().numpy()
+            action[1] = table_bounds[1] - action[1]
 
-        action = policy_out["action"].detach().numpy()
+        
         obs[28:32] = action
         #print(action)
-        no_update = (np.linalg.norm(obs[20:22] - obs[24:26]) < 0.01) and (np.linalg.norm(obs[28:30] - action[:2]) < 0.01) and (np.linalg.norm(action[:2] - obs[20:22]) < 0.01)
+        no_update_bounds = 0.01
+        no_update = (np.linalg.norm(obs[20:22] - obs[24:26]) < no_update_bounds) and (np.linalg.norm(obs[28:30] - action[:2]) < no_update_bounds) and (np.linalg.norm(action[:2] - obs[20:22]) < no_update_bounds)
         
         if not no_update:
             #print('--')
@@ -657,9 +721,10 @@ def system_loop(cam, load, pro):
             #Vo[0] = 7
             #Vo[1] = 7
             #obs[28:32] = np.concatenate([xf, Vo], axis=0)
-            get_mallet(ser)
-            mallet_data = mallet_buffer.read()
-            pos, vel, acc = get_init_conditions(pred = dt)
+            
+            time_passed = time.perf_counter() - timer1
+            timer1 = time.perf_counter()
+            pos, vel, acc = ap.get_IC(time_passed)
 
             #new_pos = pos + vel * dt + 0.5 * acc * dt**2
             #new_vel = vel + acc * dt
@@ -670,6 +735,14 @@ def system_loop(cam, load, pro):
         img = image.GetData().reshape(img_shape)
         track.process_frame(img)
         image.Release()
+        
+        get_mallet(ser)
+        pos, vel, acc = get_init_conditions()
+            
+        new_time = time.perf_counter()
+        time_diff = new_time - timer
+        timer = new_time
+            
     
     cam.EndAcquisition()
 
@@ -692,7 +765,7 @@ def main():
         
     parser = argparse.ArgumentParser()
     parser.add_argument("--load", type=str2bool, default=False)
-    parser.add_argument("--pro", type=str2bool, default=False)
+    parser.add_argument("--pro", type=str2bool, default=True)
     args = parser.parse_args()
     
     system = PySpin.System.GetInstance()

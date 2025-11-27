@@ -143,7 +143,7 @@ def collect_data():
     # Disable garbage collection during measurement
     #try:
     
-    action_commands = np.load('data/actions_overhead.npy')
+    action_commands = np.load('data/actions_newp.npy')
 
     
     PORT = '/dev/ttyUSB0'  # Adjust this to COM port or /dev/ttyUSBx
@@ -241,10 +241,10 @@ def collect_data():
             #xf = np.array([np.random.random() * (0.4) + 0.3, np.random.random() * 0.4 + 0.3])
             #Vo = np.array([np.random.random() * (24*0.8-10) + 10, np.random.random() * (24*0.8-10) + 10])
             xf = action_commands[action_idx, :2]
-            xf[0] = max(xf[0], 0.2)
-            xf[0] = min(xf[0], 0.8)
-            xf[1] = max(xf[1], 0.2)
-            xf[1] = min(xf[1], 0.8)
+            xf[0] = max(xf[0], 0.3+(action_idx%2)*0.01)
+            xf[0] = min(xf[0], 0.7+(action_idx%2)*0.01)
+            xf[1] = max(xf[1], 0.3+(action_idx%2)*0.01)
+            xf[1] = min(xf[1], 0.7+(action_idx%2)*0.01)
             
             Vo = action_commands[action_idx, 2:4]
             action_idx += 1
@@ -329,7 +329,7 @@ def collect_data():
             #print(pwms)
             #print("------")
             #print(dts)
-            with open("data/mallet_data_overhead_supercap2.csv", "w", newline="") as f:
+            with open("data/mallet_data_newp2.csv", "w", newline="") as f:
                 writer = csv.writer(f)
                 # Write header
                 writer.writerow(["x", "y", "Expected_x", "Expected_y", "Left_PWM", "Right_PWM", "dt"])

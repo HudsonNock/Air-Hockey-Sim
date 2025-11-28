@@ -329,7 +329,7 @@ def collect_data():
             #print(pwms)
             #print("------")
             #print(dts)
-            with open("data/mallet_data_newp_supercap10.csv", "w", newline="") as f:
+            with open("data/mallet_data_newp_supercap11.csv", "w", newline="") as f:
                 writer = csv.writer(f)
                 # Write header
                 writer.writerow(["x", "y", "Expected_x", "Expected_y", "Left_PWM", "Right_PWM", "dt"])

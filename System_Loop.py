@@ -497,21 +497,7 @@ def system_loop(cam, load, pro):
     ap.pullyR = pully_R
     ap.C1 = [ap.Vmax * ap.pullyR / 2, ap.Vmax * ap.pullyR / 2]
     
-    #a1 = 7.474*10**(-6) #3.579*10**(-6)
-    #a2 = 7.575e-03 #6.721*10**(-3) 
-    #a3 = 6.969e-02
-    #b1 = -1.607*10**(-6) #-1.7165*10**(-6)
-    #b2 = -2.838e-03 #-2.731*10**(-3)
-    #b3 = 3.688e-03
-    
-    a1 = 10.0e-06 
-    a2 = 9.974e-03  
-    a3 = 9.175e-02 
-    b1 = -9.3e-06 
-    b2 = -3.8e-03 
-    b3 = 7.3e-03 
-    
-    obs[-6:] = np.array([a1/ap.pullyR * 1e4, a2/ap.pullyR * 1e1, a3/ap.pullyR * 1e0, b1/ap.pullyR * 1e4, b2/ap.pullyR * 1e1, b3/ap.pullyR * 1e1])
+    obs[-6:] = np.array([ap.a1/ap.pullyR * 0.42*1e4, ap.a2/ap.pullyR * 1e1, ap.a3/ap.pullyR * 1e0, ap.b1/ap.pullyR * 0.73*1e4, ap.b2/ap.pullyR * 1e1, ap.b3/ap.pullyR * 0.8*1e1])
     
     ser.reset_input_buffer()
     

@@ -79,7 +79,7 @@ policy_module = ProbabilisticActor(
 # Vx + Vy < 2*(Vmax)
 # sqrt(2* (2*Vmax)^2)
 
-checkpoint = torch.load("model_202.pth", map_location="cpu")
+checkpoint = torch.load("model_203.pth", map_location="cpu")
 policy_module.load_state_dict(checkpoint['policy_state_dict'])
 del checkpoint
 #policy_module.load_state_dict(torch.load("model_183.pth"), map_location=torch.device("cpu")) #8
@@ -102,20 +102,12 @@ pullyR = 0.035755
 #b3 = 1.025e-02 
 
 #Mauro coeffs
-#a1 = 1.664e-05 
-#a2 = 6.802e-03  
-#a3 = 6.703e-02 
-#b1 = -1.113e-05 
-#b2 = -2.796e-03 
-#b3 = 6.535e-03 
-
-#Hudson Coeffs
-a1 = 1.957953e-05 
-a2 = 7.821892e-03  
-a3 = 6.814539e-02 
-b1 = -8.468652e-06 
-b2 = -3.023146e-03 
-b3 = 5.834825e-03 
+a1 = 1.664e-05 
+a2 = 6.802e-03  
+a3 = 6.703e-02 
+b1 = -1.113e-05 
+b2 = -2.796e-03 
+b3 = 6.535e-03 
 
 C1 = [Vmax * pullyR / 2, Vmax * pullyR / 2]
 C5 = [a1-b1, a1+b1]

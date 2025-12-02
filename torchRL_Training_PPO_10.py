@@ -20,10 +20,10 @@ import copy
 import random
 import torch.nn.functional as F
 
-load_filepath = "checkpoints/model_202.pth"
+load_filepath = "checkpoints/model_207.pth"
 second_actor_filepath = "yes"
-save_filepath = "checkpoints/model_203.pth" #Best is 12, 15, 22, 44, 76, 103, 121, 134, 142, 160, 165, 178
-train = True
+save_filepath = "checkpoints/model_207.pth" #Best is 12, 15, 22, 44, 76, 103, 121, 134, 142, 160, 165, 178
+train = False
 # Simulation parameters
 obs_dim = 38 #[puck_pos, opp_mallet_pos] #guess mean low stdl
             #[mallet_pos, mallet_vel, past mallet_pos, past malet_vel, past action]
@@ -90,7 +90,7 @@ batch_sizee = 1024
 num_epochs = 1
 lmbda = 0.7
 sim_steps = 1000
-lr_defender = 1e-5
+lr_defender = 5e-5
 q_epsilon = 0.03
 #target_kl = 0.02
 
@@ -596,11 +596,11 @@ env_idx_offset = 0
 flipped = np.random.random((envs,)) > 0.5
 
 action_map = np.array([
-    [0.1, width/2 - goal_width/2 - 0.03, 0.8, 0],
+    [0.1, width/2 - goal_width/2 - 0.03, 0.6, 0.5],
     [0.15, width/2-goal_width/3, 0.8, 0],
     [0.17, width/2, 0.8, 0],
     [0.15, width/2 + goal_width/3, 0.8, 0],
-    [0.1, width/2 + goal_width/3 + 0.03, 0.8, 0]])
+    [0.1, width/2 + goal_width/3 + 0.03, 0.6, 0.5]])
 
 q_action_idxs = np.full((int(envs/2),), 5, dtype=np.int32)
 
@@ -953,7 +953,9 @@ if train:
             dones[:envs] = (close_side & (obs[:envs,0] > bounds[0]/2)) | (err_dones)
             dones[envs:] = dones[:envs]      
 
-            qdones = np.logical_and(left_puck, past_obs[int(envs/2):envs,0] > bounds[0]/2) | err_dones[int(envs/2):]
+            #qdones = np.logical_and(left_puck, past_obs[int(envs/2):envs,0] > bounds[0]/2) | err_dones[int(envs/2):]
+
+            qdones = dones[int(envs/2):envs]
 
             rewards[dones] += terminal_rewards[dones]
             rewards /= 5
@@ -1203,7 +1205,8 @@ q_action_idxs = np.full((int(envs/2),), 5, dtype=np.int32)
 
 shooting = np.zeros((4,2,))
 update = 0
-for timestep in range(100000):
+
+for timestep in range(1000000):
     with torch.no_grad():
         if second_actor_filepath is None:
             tensor_obs = TensorDict({"observation": torch.tensor(past_obs, dtype=torch.float32)}).to('cuda')
@@ -1216,11 +1219,10 @@ for timestep in range(100000):
             actions_np = actions.numpy()
         else:
 
-            past_obs[:envs][flipped] = apply_symmetry(past_obs[:envs][flipped])
             past_obs[envs:][flipped] = apply_symmetry(past_obs[envs:][flipped])
 
             right_puck_all = past_obs[:envs,0] > bounds[0]/2
-            row_mask = right_puck_all #& (np.arange(envs) % 2 == 0)
+            row_mask = right_puck_all & (np.arange(envs) % 2 == 0)
             past_obs[envs:][row_mask, 21] += random_offset[row_mask]
             past_obs[envs:][row_mask, 25] += random_offset[row_mask]
 
@@ -1236,54 +1238,54 @@ for timestep in range(100000):
 
             actions_np = actions.numpy()                    
 
-            left_puck_fixed = obs[int(envs/4):int(envs/2),0] < bounds[0]/2
+            left_puck_fixed = past_obs[int(envs/4):int(envs/2),0] < bounds[0]/2
 
-            #action_random_pos = np.concatenate([random_pos+0.01*(np.random.random((int(envs/2) - int(envs/4), 2))-0.5), np.full((int(envs/2) - int(envs/4), 2), np.array([0.8, 0]))], axis=1)
+            action_random_pos = np.concatenate([random_pos+0.01*(np.random.random((int(envs/2) - int(envs/4), 2))-0.5), np.full((int(envs/2) - int(envs/4), 2), np.array([0.8, 0]))], axis=1)
 
-            #actions_np[envs+int(envs/4):envs+int(envs/2)][left_puck_fixed] = action_random_pos[left_puck_fixed]
-
-            actions_np[:envs, 1][flipped] = bounds[1] - actions_np[:envs, 1][flipped]
-            past_obs[:envs][flipped] = apply_symmetry(past_obs[:envs][flipped])
+            actions_np[envs+int(envs/4):envs+int(envs/2)][left_puck_fixed] = action_random_pos[left_puck_fixed]
 
             actions_np[envs:, 1][flipped] = bounds[1] - actions_np[envs:, 1][flipped]
             past_obs[envs:][flipped] = apply_symmetry(past_obs[envs:][flipped])
 
             left_puck = past_obs[int(envs/2):envs,0] < bounds[0]/2
 
+            #tensor_obs = TensorDict({"observation": torch.tensor(past_obs[envs+int(envs/2):], dtype=torch.float32)}).to('cuda')
+
             if left_puck.any():
-                if timestep % 3 == 0:
-                    tensor_obs = TensorDict({"observation": torch.tensor(past_obs[envs+int(envs/2):][left_puck], dtype=torch.float32)}).to('cuda')
-                    #tensor_obs = TensorDict({"observation": torch.tensor(past_obs[envs+int(envs/2):], dtype=torch.float32)}).to('cuda')
+                qrewards[:] = 0
+                qacting[:] = left_puck
+                qpast_obs[:] = past_obs[envs+int(envs/2):]
+                tensor_obs = TensorDict({"observation": torch.tensor(past_obs[envs+int(envs/2):][left_puck], dtype=torch.float32)}).to('cuda')
+                #tensor_obs = TensorDict({"observation": torch.tensor(past_obs[envs+int(envs/2):], dtype=torch.float32)}).to('cuda')
 
-                    q_out = q_module(tensor_obs)
-                    #print(q_out["action_value"][10])
-                    q_values = q_out["action_value"]
-                    probs = F.softmax(q_values, dim=-1)
-
-                    # Sample an action from the categorical distribution
-                    dist = Categorical(probs)
-                    q_action[left_puck] = dist.sample().detach().cpu().numpy()
-                            
-                    q_action[left_puck] = np.where(np.random.rand(np.sum(left_puck)) < q_epsilon, np.random.randint(0,3, size=np.sum(left_puck)), q_action[left_puck])
-                    q_action_idxs[left_puck] = np.clip(q_action[left_puck] - 1 + q_action_idxs[left_puck], 0, 4)
+                q_out = q_module(tensor_obs)
+                #print(q_out["action_value"][10])
+                q_values = q_out["action_value"]
+                if left_puck[-1]:
+                    print(q_values[-1,:])
+                probs = F.softmax(q_values, dim=-1)
+                # Sample an action from the categorical distribution
+                dist = Categorical(probs)
+                q_action[left_puck] = dist.sample().detach().cpu().numpy()
+                
+                q_action[left_puck] = np.where(np.random.rand(np.sum(left_puck)) < q_epsilon, np.random.randint(0,3, size=np.sum(left_puck)), q_action[left_puck])
+                q_action_idxs[left_puck] = np.clip(q_action[left_puck] - 1 + q_action_idxs[left_puck], 0, 4)
                 actions_np[envs+int(envs/2):, :][left_puck] = action_map[q_action_idxs[left_puck]]
             
     xf = np.stack([actions_np[:envs, :2], actions_np[envs:,:2]], axis=1)
     xf[:,1,:] = bounds - xf[:,1,:]
 
-    #print(actions[envs-1,2])
     Vo = actions_np[:,2][:, None] * Vmax * np.stack((1+actions_np[:,3], 1-actions_np[:,3]), axis=1) + np.stack((np.random.normal(0, V_std_x, (2*envs)), np.random.normal(0, V_std_y, (2*envs))), axis=-1)
-    too_low_voltage = np.logical_or(Vo[:,0] < 0.3, Vo[:,1] < 0.3)
-    #print(actions_np[0,2])
-    rewards[too_low_voltage] -= 0.1
-    if too_low_voltage[0]:
-        print("LOW VOLTAGE")
-    Vo[:,0] = np.maximum(Vo[:,0], 0.03)
-    Vo[:,1] = np.maximum(Vo[:,1], 0.03)
+    #too_low_voltage = np.logical_or(Vo[:,0] < 0.2, Vo[:,1] < 0.2)
+    #rewards[too_low_voltage] -= 0.1
+    #if too_low_voltage[0]:
+    #    print("LOW VOLTAGE")
+    Vo[:,0] = np.maximum(Vo[:,0], 0.05)
+    Vo[:,1] = np.maximum(Vo[:,1], 0.05)
     Vo = np.stack([Vo[:envs,:], Vo[envs:,:]], axis=1)
 
     no_update_mask = (np.linalg.norm(past_obs[:,20:22] - past_obs[:,24:26], axis=1) < 0.01) & (np.linalg.norm(past_obs[:,28:30] - actions_np[:,:2], axis=1) < 0.01) & (np.linalg.norm(actions_np[:,:2] - past_obs[:,20:22], axis=1) < 0.01)
-    #rewards[envs+int(envs/2):][no_update_mask[envs+int(envs/2):]] += 0.1
+    rewards[:envs][no_update_mask[:envs]] += 0.02
     no_update_mask = np.stack([no_update_mask[:envs], no_update_mask[envs:]], axis=1)
 
     xf[no_update_mask] = past_xf[no_update_mask]
@@ -1293,7 +1295,7 @@ for timestep in range(100000):
     past_Vo = Vo.copy()
 
     sim.take_action(xf, Vo)
-    sim.impulse(2/60, 0.0034)
+    #sim.impulse(2/60, 0.0034)
 
     obs[:, 24:28] = past_obs[:, 20:24]
     obs[:, 28:32] = actions_np
@@ -1301,8 +1303,13 @@ for timestep in range(100000):
     rewards[:envs] += np.where((actions_np[:envs,0] < mallet_r+0.03) | (actions_np[:envs,0] > bounds[0]/2-mallet_r-0.03), -0.1, 0)
     rewards[:envs] += np.where((actions_np[:envs,1] < mallet_r+0.03) | (actions_np[:envs,1] > bounds[1] - mallet_r - 0.03), -0.1, 0)
 
-    rewards[:envs] -= actions_np[:envs,2] * 0.003
-    rewards[:envs] += np.where((actions_np[:envs,2] > 0.98) | (actions_np[:envs,2] < 0.02), -0.1, 0)
+    #acc_time = sim.get_a()
+    #acc_time = np.max(acc_time[:,0,:],axis=1)
+    #apply_acctime = np.linalg.norm(obs[:envs,28:30] - obs[:envs,24:26], axis=1) > 0.2
+    #rewards[:envs][apply_acctime] += np.clip(np.arctan(20*np.clip(0.05 - acc_time[apply_acctime], -10, 0)) * 0.05, -0.1, 0)
+
+    rewards[:envs] -= np.clip(actions_np[:envs,2],0,0.5) * 0.006
+    rewards[:envs] += np.where((actions_np[:envs,2] > 0.99) | (actions_np[:envs,2] < 0.01), -0.1, 0)
     rewards[:envs] += np.where((actions_np[:envs,3] > 0.98) | (actions_np[:envs,3] < -0.98), -0.1, 0)
 
     while True:
@@ -1349,7 +1356,7 @@ for timestep in range(100000):
             terminal_rewards[:envs][entered_left_goal_mask] -= 100
             err_dones[entered_left_goal_mask | entered_right_goal_mask] = True
 
-            terminal_rewards[:envs] += np.where(cross_right != -1, score_avg*(20+np.sqrt(np.maximum(cross_right,0))/2), 0)
+            terminal_rewards[:envs] += np.where(cross_right != -1, score_avg*(10+np.maximum(cross_right,0)/6), 0)
             terminal_rewards[envs:] += np.where(cross_right != -1, -20.0*score_avg, 0)
 
             for i in range(4):
@@ -1379,15 +1386,12 @@ for timestep in range(100000):
                 puck_pos = np.concatenate([puck_pos + puck_noise + puck_wgn_noise, bounds - puck_pos],axis=0)
 
             #mallet_noise = np.empty((envs, 4)) #mallet, op mallet
-            for i in range(2, 4):
+            for i in range(2,4):
                 noise_idx = (mallet_pos[:,int(i/2),:]*100).astype(np.int16) + noise_seeds[:,2+i%2,:]
                 noise_idx[:,0] = np.clip(noise_idx[:,0], 0, 1999)
                 noise_idx[:,1] = np.clip(noise_idx[:,1], 0, 999)
                 mallet_noise[:,i] = noise_map[noise_idx[:,0], noise_idx[:,1]]
-            mallet_wgn_noise = np.stack((np.random.normal(0, puck_std[0,0] * mallet_pos[:,1,0] + puck_std[0,1], (envs,)), np.random.normal(0, puck_std[1,0] * mallet_pos[:,1,0] + puck_std[1,1], (envs,))), axis=-1)
-
-            op_mallet_pos = np.concatenate([mallet_pos[:,1,:] + mallet_noise[:,2:] + mallet_wgn_noise, bounds - mallet_pos[:,0,:]], axis=0)
-
+            op_mallet_pos = np.concatenate([mallet_pos[:,1,:] + mallet_noise[:,2:], bounds - mallet_pos[:,0,:]], axis=0)
             camera_buffer.put(np.concatenate([puck_pos, op_mallet_pos], axis=1))
 
             time_from_last_img = 0
@@ -1395,9 +1399,6 @@ for timestep in range(100000):
             mallet_time.subtract(next_img)
             agent_actions.put(np.clip(np.random.normal(image_delay[0], image_delay[1]), image_delay[2], image_delay[3]))
             mallet_time.put(agent_actions.get(0) - np.clip(np.random.normal(mallet_delay[0], mallet_delay[1]), mallet_delay[2], mallet_delay[3]))
-
-            #if np.any(score_avg > 0):
-            #    print(score_avg)
 
             inference_img.put(np.logical_not(inference_img.get(0)))
         elif next_mallet < next_img and next_mallet < next_action:
@@ -1416,7 +1417,7 @@ for timestep in range(100000):
             terminal_rewards[:envs][entered_left_goal_mask] -= 100
             err_dones[entered_left_goal_mask | entered_right_goal_mask] = True
 
-            terminal_rewards[:envs] += np.where(cross_right != -1, score_avg*(20+np.sqrt(np.maximum(cross_right,0))/2), 0)
+            terminal_rewards[:envs] += np.where(cross_right != -1, score_avg*(10+np.maximum(cross_right,0)/6), 0)
             terminal_rewards[envs:] += np.where(cross_right != -1, -20.0*score_avg, 0)
 
             for i in range(4):
@@ -1432,9 +1433,6 @@ for timestep in range(100000):
             time_from_last_img -= next_mallet
             agent_actions.subtract(next_mallet)
             mallet_time.subtract(next_mallet)
-
-            #if np.any(score_avg > 0):
-            #    print(score_avg)
 
         elif next_action < next_img and next_action < next_mallet:
             mallet_pos, _, puck_pos, puck_vel, score_avg, cross_right = sim.step(next_action)
@@ -1452,14 +1450,12 @@ for timestep in range(100000):
             terminal_rewards[:envs][entered_left_goal_mask] -= 100
             err_dones[entered_left_goal_mask | entered_right_goal_mask] = True
 
-            terminal_rewards[:envs] += np.where(cross_right != -1, score_avg*(20+np.sqrt(np.maximum(cross_right,0))/2), 0)
+            terminal_rewards[:envs] += np.where(cross_right != -1, score_avg*(10+np.maximum(cross_right,0)/6), 0)
             terminal_rewards[envs:] += np.where(cross_right != -1, -20.0*score_avg, 0)
 
             for i in range(4):
                 shooting[i,0] += np.sum(score_avg[int(envs*i/4):int(envs*(i+1)/4)])
                 shooting[i,1] += np.sum(cross_right[int(envs*i/4):int(envs*(i+1)/4)] != -1)
-
-            #print(cross_right)
 
             camera_obs = camera_buffer.get(indices=[img_idx, img_idx+1, img_idx+2, img_idx+5, img_idx+11])
             obs[:,:20] = camera_obs
@@ -1473,27 +1469,24 @@ for timestep in range(100000):
             agent_actions.subtract(next_action)
             mallet_time.subtract(next_action)
 
-            #if np.any(score_avg > 0):
-            #    print(score_avg)
-
             break
-
-    #print("--")
-    #print(shooting[0,0])
-    #print(shooting[0,1])
 
     actions_since_reset += 1
 
     rewards[:envs] -= np.linalg.norm(obs[:envs,20:22] - obs[:envs,24:26], axis=1) * 0.1
 
     dones[:envs] = (close_side & (obs[:envs,0] > bounds[0]/2)) | (err_dones)
-    dones[envs:] = dones[:envs]            
+    dones[envs:] = dones[:envs]      
+
+    qdones = dones[int(envs/2):envs] #np.logical_and(left_puck, obs[int(envs/2):envs,0] > bounds[0]/2) | err_dones[int(envs/2):]
 
     rewards[dones] += terminal_rewards[dones]
     rewards /= 5
     terminal_rewards[dones] = 0
 
     flipped[dones[:envs]] = np.random.random((np.sum(dones[:envs]),)) > 0.5
+
+    qrewards += rewards[envs+int(envs/2):]   
 
     #print("---")
     #print(rewards[envs + int(envs/2) + 10])
@@ -1503,8 +1496,28 @@ for timestep in range(100000):
     #print(past_obs[0])
     #print(obs[0,28:32])
     #print(apply_symmetry(torch.tensor(past_obs[0])[None, :]))
+
+    defender_step = qacting #((timestep % 3 == 2) | qdones)
+
+    #if defender_step.any():
+        #td = TensorDict({
+        #        "observation": torch.tensor(qpast_obs[defender_step], dtype=torch.float32),
+        #        "action": torch.tensor(q_action[defender_step][:,None], dtype=torch.int64),
+        #        "next": TensorDict({
+        #            "reward": torch.tensor(qrewards[defender_step][:,None], dtype=torch.float32),
+        #            "observation": torch.tensor(obs[envs+int(envs/2):][defender_step], dtype=torch.float32),
+        #            "done": torch.tensor(qdones[defender_step][:,None], dtype=torch.bool),
+        #        }, batch_size=[defender_step.sum()]),
+        #    }, batch_size=[defender_step.sum()])
+
+    if defender_step[-1]:
+        print("--")
+        print(qrewards[-1])
+        print(qdones[-1])
+
+    qacting[qdones] = False
             
-    sim.display_state(0) #envs-1)
+    sim.display_state(envs-1)
 
     #print("---")
     #print(past_obs[0])
@@ -1521,12 +1534,26 @@ for timestep in range(100000):
     num_resets = int(np.sum(dones) / 2)
 
     if num_resets > 0:
-        
-        obs[dones] = np.concatenate([obs_init[dones], ab_obs[dones]], axis=1)
+        ab_vars = np.random.uniform(
+                low=ab_ranges[:, 0].reshape(1, 1, 6),    # Shape: (1, 1, 5)
+                high=ab_ranges[:, 1].reshape(1, 1, 6),   # Shape: (1, 1, 5)
+                size=(num_resets, 2, 6)                     # Output shape
+            )
+
+        ab_vars[:,:,3:] = ab_vars[:,:,3:] / np.abs(ab_vars[:,:,3:]) * np.minimum(np.abs(ab_vars[:,:,3:]), np.abs(ab_vars[:,:,:3])*9.5/10)
+
+        ab_vars *= np.random.uniform(speed_var[0], speed_var[1], size=(num_resets, 2, 1))
+
+        ab_obs = np.zeros((2*num_resets, 6))
+            
+        ab_obs[:num_resets, :] = (ab_vars[:,0,:] / pullyR) * ab_obs_scaling[:]
+        ab_obs[num_resets:, :] = (ab_vars[:,1,:] / pullyR) * ab_obs_scaling[:]
+
+        obs[dones] = np.concatenate([obs_init[dones], ab_obs], axis=1)
 
         camera_buffer.reset(np.where(dones)[0])
 
-        sim.reset_sim(np.where(dones[:envs])[0], ab_vars[dones[:envs]])
+        sim.reset_sim(np.where(dones[:envs])[0], ab_vars)
 
     past_obs = obs.copy()
     dones[:] = False

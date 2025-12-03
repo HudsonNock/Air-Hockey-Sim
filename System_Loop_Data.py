@@ -536,7 +536,7 @@ def system_loop(cam, load, pro):
     
     if not load:
         xf = np.array([0.7, 0.2])
-        Vo = np.array([4, 4])
+        Vo = np.array([5, 5])
         
         get_mallet(ser)
         pos, vel, acc = get_init_conditions()
@@ -555,7 +555,7 @@ def system_loop(cam, load, pro):
         cutoff = np.array([np.max(y_max[max(0,i-30):min(i+30, len(y_max))]) for i in range(len(y_max))])
         
         xf = np.array([0.2, 0.2])
-        Vo = np.array([4, 4])
+        Vo = np.array([5, 5])
         
         ser.reset_input_buffer()
         
@@ -729,8 +729,8 @@ def system_loop(cam, load, pro):
             
 
             Vo = action[2] * Vmax * np.array([1+action[3],1-action[3]])
-            Vo[0] = np.minimum(Vo[0], 4)
-            Vo[1] = np.minimum(Vo[1], 4)
+            Vo[0] = np.minimum(Vo[0], 12)
+            Vo[1] = np.minimum(Vo[1], 12)
             #print("A")
             #print(xf)
             #print(Vo)
@@ -780,10 +780,10 @@ def system_loop(cam, load, pro):
         
         if idx == len(recording_data):
             
-            with open("data/system_loop_data_N9.csv", "w", newline="") as f:
+            with open("data/system_loop_data_N10.csv", "w", newline="") as f:
                 writer = csv.writer(f)
                 # Write header
-                writer.writerow(["Px", "Py", "Mx", "My", "Mxv", "Myv", "dt"])
+                writer.writerow(["Px", "Py", "x", "y", "Mxv", "Myv", "dt"])
                 
                 # Write rows
                 for i in range(len(recording_data)):

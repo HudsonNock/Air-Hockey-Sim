@@ -666,7 +666,7 @@ def system_loop(cam, load, pro):
         
         if idx == len(recording_data):
             
-            with open("data/system_loop_data_N10.csv", "w", newline="") as f:
+            with open("data/system_loop_data_N11.csv", "w", newline="") as f:
                 writer = csv.writer(f)
                 # Write header
                 writer.writerow(["Px", "Py", "Mx", "My", "Mxv", "Myv", "dt"])
@@ -729,8 +729,8 @@ def system_loop(cam, load, pro):
             
 
             Vo = action[2] * Vmax * np.array([1+action[3],1-action[3]])
-            Vo[0] = np.minimum(Vo[0], 12)
-            Vo[1] = np.minimum(Vo[1], 12)
+            #Vo[0] = np.minimum(Vo[0], 12)
+            #Vo[1] = np.minimum(Vo[1], 12)
             #print("A")
             #print(xf)
             #print(Vo)
@@ -780,7 +780,7 @@ def system_loop(cam, load, pro):
         
         if idx == len(recording_data):
             
-            with open("data/system_loop_data_N10.csv", "w", newline="") as f:
+            with open("data/system_loop_data_N11.csv", "w", newline="") as f:
                 writer = csv.writer(f)
                 # Write header
                 writer.writerow(["Px", "Py", "x", "y", "Mxv", "Myv", "dt"])

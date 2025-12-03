@@ -31,8 +31,8 @@ obs[-3] = (-6.5e-06)/ap.pullyR * 1e4
 
 obs_flip = np.empty((obs_dim), dtype=np.float32)
 
-margin = 0.03
-margin_bottom = 0.03
+margin = 0.05
+margin_bottom = 0.05
 
 mallet_r = 0.1011 / 2
 puck_r = 0.0629 / 2
@@ -497,14 +497,7 @@ def system_loop(cam, load, pro):
     ap.pullyR = pully_R
     ap.C1 = [ap.Vmax * ap.pullyR / 2, ap.Vmax * ap.pullyR / 2]
     
-    a1 = 7.474*10**(-6) #3.579*10**(-6)
-    a2 = 7.575e-03 #6.721*10**(-3) 
-    a3 = 6.969e-02
-    b1 = -1.607*10**(-6) #-1.7165*10**(-6)
-    b2 = -2.838e-03 #-2.731*10**(-3)
-    b3 = 3.688e-03
-    
-    obs[-6:] = np.array([a1/ap.pullyR * 1e4, a2/ap.pullyR * 1e1, a3/ap.pullyR * 1e0, (-6.5e-06)/ap.pullyR * 1e4, b2/ap.pullyR * 1e1, b3/ap.pullyR * 1e1]) * 1.1
+    obs[-6:] = np.array([ap.a1/ap.pullyR * 0.42*1e4, ap.a2/ap.pullyR * 1e1, ap.a3/ap.pullyR * 1e0, ap.b1/ap.pullyR * 0.73*1e4, ap.b2/ap.pullyR * 1e1, ap.b3/ap.pullyR * 0.8*1e1])
     
     ser.reset_input_buffer()
     
@@ -603,6 +596,11 @@ def system_loop(cam, load, pro):
                                   
         del setup
     else:
+        get_mallet(ser)
+        pos, vel, acc = get_init_conditions()
+
+        data = ap.update_path(pos, vel, acc, pos + np.array([0.004,0.005]), np.array([3,3]))
+        
         setup_data = np.load("setup_data.npz")
         track = tracker.CameraTracker(setup_data["rotation_matrix"],
                                       setup_data["translation_vector"],
@@ -629,10 +627,13 @@ def system_loop(cam, load, pro):
     #timer = time.perf_counter()
     
     recording_data = np.zeros([20000, 7])
+    #action_commands = np.full((1200,5), np.array([0.5, 0.5, 15, 15, 0.02]))
     idx = 0
+    #action_idx = 0
     timer = time.perf_counter()
     left_hysteresis = False
     symmetry = False
+    timer1 = time.perf_counter()
     while True:
     
         image = cam.GetNextImage()
@@ -664,7 +665,8 @@ def system_loop(cam, load, pro):
         idx += 1
         
         if idx == len(recording_data):
-            with open("system_loop_data_N6.csv", "w", newline="") as f:
+            
+            with open("system_loop_data_N7.csv", "w", newline="") as f:
                 writer = csv.writer(f)
                 # Write header
                 writer.writerow(["Px", "Py", "Mx", "My", "Mxv", "Myv", "dt"])
@@ -673,7 +675,11 @@ def system_loop(cam, load, pro):
                 for i in range(len(recording_data)):
                     writer.writerow([recording_data[i, 0], recording_data[i, 1], recording_data[i, 2], recording_data[i, 3], recording_data[i, 4], recording_data[i,5], recording_data[i,6]])
             print("SIGNAL END")
+            
+            #np.save('data/actions_newp2.npy', action_commands)
             break
+            
+            
         
         
         #print("--")
@@ -695,7 +701,7 @@ def system_loop(cam, load, pro):
         
         obs[28:32] = action
         #print(action)
-        no_update_bounds = 0.08
+        no_update_bounds = 0.01
         no_update = (np.linalg.norm(obs[20:22] - obs[24:26]) < no_update_bounds) and (np.linalg.norm(obs[28:30] - action[:2]) < no_update_bounds) and (np.linalg.norm(action[:2] - obs[20:22]) < no_update_bounds)
         
         if not no_update:
@@ -732,9 +738,22 @@ def system_loop(cam, load, pro):
             #Vo[0] = 7
             #Vo[1] = 7
             #obs[28:32] = np.concatenate([xf, Vo], axis=0)
-            get_mallet(ser)
-            mallet_data = mallet_buffer.read()
-            pos, vel, acc = get_init_conditions(pred = dt)
+            
+            time_passed = time.perf_counter() - timer1
+            timer1 = time.perf_counter()
+            pos, vel, acc = ap.get_IC(time_passed)
+            
+            #if action_idx == len(action_commands):
+            #    print("SIGNAL END ACTION")
+                        
+            #    np.save('data/actions_newp2.npy', action_commands)
+            #    break
+            
+            #action_commands[action_idx, :2] = xf
+            #action_commands[action_idx, 2:4] = Vo
+            #action_commands[action_idx, 4] = time_passed
+            
+            #action_idx += 1
 
             #new_pos = pos + vel * dt + 0.5 * acc * dt**2
             #new_vel = vel + acc * dt
@@ -760,7 +779,8 @@ def system_loop(cam, load, pro):
         idx += 1
         
         if idx == len(recording_data):
-            with open("system_loop_data_N6.csv", "w", newline="") as f:
+            
+            with open("system_loop_data_N7.csv", "w", newline="") as f:
                 writer = csv.writer(f)
                 # Write header
                 writer.writerow(["Px", "Py", "Mx", "My", "Mxv", "Myv", "dt"])
@@ -768,8 +788,13 @@ def system_loop(cam, load, pro):
                 # Write rows
                 for i in range(len(recording_data)):
                     writer.writerow([recording_data[i, 0], recording_data[i, 1], recording_data[i, 2], recording_data[i, 3], recording_data[i, 4], recording_data[i,5], recording_data[i,6]])
+            
             print("SIGNAL END")
+                        
+            #np.save('data/actions_newp2.npy', action_commands)
             break
+            
+            
     
     cam.EndAcquisition()
 

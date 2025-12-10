@@ -3,7 +3,7 @@ import cv2
 import numpy as np
 
 # Configuration
-csv_file = 'system_loop_data_N2.csv' # Replace with your CSV filename
+csv_file = 'system_loop_data_N12.csv' # Replace with your CSV filename
 mallet_r = 0.1011 / 2
 puck_r = 0.0629 / 2
 
@@ -24,6 +24,7 @@ mallet_r_px = int(mallet_r * px_per_meter)
 
 # Load CSV data
 df = pd.read_csv(csv_file)
+df = df[400:]
 
 # Calculate average time between frames for FPS
 if len(df) > 1:
@@ -42,15 +43,13 @@ print(f"Total frames: {len(df)}")
 
 # Initialize video writer
 fourcc = cv2.VideoWriter_fourcc(*'MJPG')
-out = cv2.VideoWriter("gameplay_new2.avi", fourcc, calculated_fps, (screen_width, screen_height))
+out = cv2.VideoWriter("gameplay_new3.avi", fourcc, calculated_fps, (screen_width, screen_height))
 
 frame_count = 0
 prev_mx = None
 prev_my = None
 
 for idx, row in df.iterrows():
-    if idx < 7500:
-        continue
     # Create blank image (dark green background for air hockey table)
     img = np.zeros((screen_height, screen_width, 3), dtype=np.uint8)
     img[:] = (0, 100, 0)  # Green background
@@ -73,12 +72,12 @@ for idx, row in df.iterrows():
         mx_y = int((field_height - prev_my) * px_per_meter)  # Flip Y
     else:
         # For first frame, use current mallet position
-        mx_x = int(row['Mx'] * px_per_meter)
-        mx_y = int((field_height - row['My']) * px_per_meter)
+        mx_x = int(row['x'] * px_per_meter)
+        mx_y = int((field_height - row['y']) * px_per_meter)
     
     # Store current mallet position for next frame
-    prev_mx = row['Mx']
-    prev_my = row['My']
+    prev_mx = row['x']
+    prev_my = row['y']
     
     # Draw puck (white)
     cv2.circle(img, (px_x, px_y), puck_r_px, (255, 255, 255), -1)

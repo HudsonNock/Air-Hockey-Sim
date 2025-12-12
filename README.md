@@ -27,8 +27,17 @@ First Half of Project: [Final Report](docs/2509-AIAirHockey-FinalReport.pdf)
 
 Below we give short outlines for each system, many of the technical details are outlined in the final report.
 
-<details>
-<summary>⚙️ Electro-Mechanical System</summary>
+## Table of Contents
+
+* [⚙️ Electro-Mechanical System](#electro-mechanical-system)
+* [🎯 Computer Vision](#computer-vision)
+* [🧩 Mallet System ID](#mallet-system-id)
+* [🔘 Puck System ID](#puck-system-id)
+* [💻 Firmware and System Timings](#firmware-and-system-timings)
+* [🎮 Simulation](#simulation)
+* [🧠 Reinforcement Learning](#reinforcement-learning)
+
+# ⚙️ Electro-Mechanical System
 
 This project is part of a multiyear effort. Our team **inherited the electromechanical subsystem** from the previous group (this was the only major component we retained) though we made several adjustments and improvements.
 
@@ -89,11 +98,7 @@ To improve system reliability, accuracy, and maintainability, several mechanical
 
 These improvements would provide a more robust and consistent physical platform for reinforcement learning experiments, simulation validation, and long-term autonomous gameplay testing.
 
-</details>
-
-
-<details>
-<summary>🎯 Computer Vision</summary>
+# 🎯 Computer Vision
 
 Our computer vision system enables precise tracking of the puck and opponent mallet using a single camera placed on a tripod.
 
@@ -150,144 +155,129 @@ By detecting concentric contours, we can differentiate between puck and mallet a
 
 For a full description of the calibration math, optimization routine, and occlusion-robust tracking algorithm, see the [Final Report](link-to-report).
 
-</details>
+# 🧩 Mallet System ID
 
-<details>
-<summary>🧩 System ID</summary>
+To accurately simulate the environment, we needed to model the **mallet and puck dynamics**.  
+The mallet motion can be characterized as a **third-order transfer function** relating motor voltage to mallet position
 
-- <details>
-  <summary>Mallet System ID</summary>
+![](docs/feedforward_eq.png)
 
-  ## Mallet System Identification
+We can then map this into two SISO systems, with the Cartesian control voltages as:
 
-  To accurately simulate the environment, we needed to model the **mallet and puck dynamics**.  
-  The mallet motion can be characterized as a **third-order transfer function** relating motor voltage to mallet position
+<p align="center">$V_y = -V_1 - V_2 = \frac{2}{R} \left[ (a_1 + b_1)\dddot{y} + (a_2 + b_2)\ddot{y} + (a_3 + b_3)\dot{y} \right]$</p>
 
-  ![](docs/feedforward_eq.png)
+<p align="center">$V_x = V_1 - V_2 = \frac{2}{R} \left[ (a_1 - b_1)\dddot{x} + (a_2 - b_2)\ddot{x} + (a_3 - b_3)\dot{x} \right]$</p>
 
-  We can then map this into two SISO systems, with the Cartesian control voltages as:
+### Parameter Identification
 
-  <p align="center">$V_y = -V_1 - V_2 = \frac{2}{R} \left[ (a_1 + b_1)\dddot{y} + (a_2 + b_2)\ddot{y} + (a_3 + b_3)\dot{y} \right]$</p>
+Using encoder data for position and measured voltages \( V_x, V_y \), we performed parameter identification in MATLAB. The code for this section was written by Mauro.
 
-  <p align="center">$V_x = V_1 - V_2 = \frac{2}{R} \left[ (a_1 - b_1)\dddot{x} + (a_2 - b_2)\ddot{x} + (a_3 - b_3)\dot{x} \right]$</p>
+The identification process involved:
+1. Splitting the trajectory data into **short path segments**.  
+2. For each segment, fitting a small polynomial to obtain the initial conditions.  
+3. Running an optimization over parameters \( a_1, ..., b_3 \) to minimize the mean squared error between simulated and measured motion.
 
-  ### Parameter Identification
+Only segments with a strong polynomial fit were used in the optimization.
 
-  Using encoder data for position and measured voltages \( V_x, V_y \), we performed parameter identification in MATLAB. The code for this section was written by Mauro.
+---
 
-  The identification process involved:
-  1. Splitting the trajectory data into **short path segments**.  
-  2. For each segment, fitting a small polynomial to obtain the initial conditions.  
-  3. Running an optimization over parameters \( a_1, ..., b_3 \) to minimize the mean squared error between simulated and measured motion.
+### Feedforward and Feedback Control
 
-  Only segments with a strong polynomial fit were used in the optimization.
+With the identified transfer function, we implemented **feedforward control** — generating voltage profiles that would ideally produce a desired mallet trajectory.
 
-  ---
-  
-  ### Feedforward and Feedback Control
-  
-  With the identified transfer function, we implemented **feedforward control** — generating voltage profiles that would ideally produce a desired mallet trajectory.
-  
-  However, due to nonlinearities (e.g., friction, backlash, and voltage saturation), the pure feedforward model was insufficient.  
-  We therefore added **feedback control** with PID.
-  
-  To find the optimal feedback coefficients for PID in simulation:
-  - We tuned the PID controller to follow x - x^ (the actual minus expected path) from data collected
-  - Feedback voltages were then mapped to a change in position using the feedforward model previously identified
-  - The loop modeled realistic factors such as voltage limits, delay between control updates, and the Blue Pill microcontroller’s control period.
-  
-  ---
+However, due to nonlinearities (e.g., friction, backlash, and voltage saturation), the pure feedforward model was insufficient.  
+We therefore added **feedback control** with PID.
 
-  ### Results
-  
-  Combining feedforward and feedback control yielded **millimeter-level tracking accuracy** relative to the reference trajectory.
-  
-  This model forms the foundation of the simulated environment and ensures that reinforcement learning agents experience realistic, physics-based dynamics.
-  
-  </details>
+To find the optimal feedback coefficients for PID in simulation:
+- We tuned the PID controller to follow x - x^ (the actual minus expected path) from data collected
+- Feedback voltages were then mapped to a change in position using the feedforward model previously identified
+- The loop modeled realistic factors such as voltage limits, delay between control updates, and the Blue Pill microcontroller’s control period.
 
-- <details>
-  <summary>Puck System ID</summary>
-  
-  ## Puck ODE
+---
 
-  To accurately simulate the air hockey environment, we needed to model the puck dynamics and collision behavior.  
-  The puck motion can be described by a simple nonlinear ordinary differential equation:
+### Results
 
-  <p align="center">$m \ddot{x} = -f - B \dot{x}^2$</p>
+Combining feedforward and feedback control yielded **millimeter-level tracking accuracy** relative to the reference trajectory.
 
-  where  
-  - \( m \) is the puck mass,  
-  - \( f \) represents friction, and  
-  - \( B \) is a drag coefficient term related to air resistance.
-  
-  We fit this model to the motion data obtained from tracking the puck. The parameters were estimated using nonlinear regression to minimize the mean squared error between the observed and predicted trajectories. The optimization code here was written by Ian.
+This model forms the foundation of the simulated environment and ensures that reinforcement learning agents experience realistic, physics-based dynamics.
 
-  ---
-  
-  ### Modeling Collisions
-  
-  Modeling the puck’s collisions with both the mallet and the walls proved more complex.  
-  Initially, we modeled collisions using two separate restitution relationships:
-  - Normal restitution as a function of incoming normal velocity, and  
-  - Tangential restitution as a function of incoming tangential velocity.
-  
-  However, the real data exhibited significant variation, suggesting that the normal and tangential components were **not independent**.
-  
-  To better capture the behavior, we modeled the **output velocity and angle** as a function of the **input velocity and impact angle**.  
-  Since no simple analytical function fit the data well, we instead trained a small neural network with **112 parameters** and **Softplus activations** to approximate the mapping.
+# 🔘 Puck System ID
 
-  ![](docs/collision_NN_vel.png)
-  ![](docs/collision_NN_angle.png)
-  
-  The network also produced **heteroscedastic outputs**, meaning it learned to predict both the expected value and the uncertainty (standard deviation) for each output dimension.
+## Puck ODE
 
-  ![](docs/collision_NN_sigma.png)
-  
-  ---
-  
-  ### Data Processing
-  
-  The collision dataset was built from filtered puck trajectories:
-  1. We first identified segments where the puck trajectory could be fit accurately by a linear model over time.  
-  2. Adjacent linear segments were extrapolated to detect potential intersections — either with a wall or a mallet.
-  3. If the intersection occurred near a wall, it was labeled as a **wall collision**; otherwise, if it occurred near the mallet position, it was labeled as a **puck–mallet collision**.
-  
-  For each mallet collision:
-  - The mallet trajectory was fitted using a polynomial within a 30 ms window.  
-  - The exact contact point was found by minimizing
-    <p align="center">$| \| P_\text{puck} - P_\text{mallet} \| - (r_\text{puck} + r_\text{mallet}) |$</p>
-  
-  We then transformed all collision data into the **mallet frame of reference** and computed:
-  - Incoming velocity and angle  
-  - Outgoing velocity and angle
-  
-  This produced a large dataset used to train the neural network model.
-  
-  ---
-  
-  ### Extrapolation for Out-of-Distribution Data
-  
-  Since we could not experimentally capture high-velocity collisions, we augmented the dataset with **synthetic extrapolated samples** at higher speeds.  
-  This ensured that the simulation remained stable and physically reasonable even in scenarios that extended beyond the training distribution.
+To accurately simulate the air hockey environment, we needed to model the puck dynamics and collision behavior.  
+The puck motion can be described by a simple nonlinear ordinary differential equation:
 
-  ![](docs/collision_NN_out_of_dist.png)
-  
-  ---
-  
-  ### Summary
-  
-  The resulting model captures both deterministic and stochastic aspects of puck dynamics:
-  - The ODE models continuous motion under drag and friction.  
-  - The neural network models nonlinear, uncertain collision responses.  
-  
-  Together, these models provide a realistic simulation of puck behavior suitable for reinforcement learning and physics-based gameplay.
-  </details>
+<p align="center">$m \ddot{x} = -f - B \dot{x}^2$</p>
 
-</details>
+where  
+- \( m \) is the puck mass,  
+- \( f \) represents friction, and  
+- \( B \) is a drag coefficient term related to air resistance.
 
-<details>
-<summary>💻 Firmware and System Timings</summary>
+We fit this model to the motion data obtained from tracking the puck. The parameters were estimated using nonlinear regression to minimize the mean squared error between the observed and predicted trajectories. The optimization code here was written by Ian.
+
+---
+
+### Modeling Collisions
+
+Modeling the puck’s collisions with both the mallet and the walls proved more complex.  
+Initially, we modeled collisions using two separate restitution relationships:
+- Normal restitution as a function of incoming normal velocity, and  
+- Tangential restitution as a function of incoming tangential velocity.
+
+However, the real data exhibited significant variation, suggesting that the normal and tangential components were **not independent**.
+
+To better capture the behavior, we modeled the **output velocity and angle** as a function of the **input velocity and impact angle**.  
+Since no simple analytical function fit the data well, we instead trained a small neural network with **112 parameters** and **Softplus activations** to approximate the mapping.
+
+![](docs/collision_NN_vel.png)
+![](docs/collision_NN_angle.png)
+
+The network also produced **heteroscedastic outputs**, meaning it learned to predict both the expected value and the uncertainty (standard deviation) for each output dimension.
+
+![](docs/collision_NN_sigma.png)
+
+---
+
+### Data Processing
+
+The collision dataset was built from filtered puck trajectories:
+1. We first identified segments where the puck trajectory could be fit accurately by a linear model over time.  
+2. Adjacent linear segments were extrapolated to detect potential intersections — either with a wall or a mallet.
+3. If the intersection occurred near a wall, it was labeled as a **wall collision**; otherwise, if it occurred near the mallet position, it was labeled as a **puck–mallet collision**.
+
+For each mallet collision:
+- The mallet trajectory was fitted using a polynomial within a 30 ms window.  
+- The exact contact point was found by minimizing
+  <p align="center">$| \| P_\text{puck} - P_\text{mallet} \| - (r_\text{puck} + r_\text{mallet}) |$</p>
+
+We then transformed all collision data into the **mallet frame of reference** and computed:
+- Incoming velocity and angle  
+- Outgoing velocity and angle
+
+This produced a large dataset used to train the neural network model.
+
+---
+
+### Extrapolation for Out-of-Distribution Data
+
+Since we could not experimentally capture high-velocity collisions, we augmented the dataset with **synthetic extrapolated samples** at higher speeds.  
+This ensured that the simulation remained stable and physically reasonable even in scenarios that extended beyond the training distribution.
+
+![](docs/collision_NN_out_of_dist.png)
+
+---
+
+### Summary
+
+The resulting model captures both deterministic and stochastic aspects of puck dynamics:
+- The ODE models continuous motion under drag and friction.  
+- The neural network models nonlinear, uncertain collision responses.  
+
+Together, these models provide a realistic simulation of puck behavior suitable for reinforcement learning and physics-based gameplay.
+
+# 💻 Firmware and System Timings
 
 ## System Architecture
 
@@ -359,10 +349,7 @@ With code optimizations and the RT kernel, the main loop processes in **6-7 ms**
 - CPU frequency locked to maximum
 - Process pinned to isolated cores for consistent performance
 
-</details>
-
-<details>
-<summary>🎮 Simulation</summary>
+# 🎮 Simulation
 
 ## Overview
 
@@ -407,218 +394,206 @@ Traditional simulations use fixed `dt` timesteps, creating a trade-off between p
 **Result**: Able to run the simulation at **450× real-time speedup** on an Intel i5 processor.
 
 *Additional implementation details and derivations are provided in the final report.*
-</details>
 
-<details>
-<summary>🧠 Reinforcment Learning</summary>
+# 🧠 Reinforcement Learning
   
-- <details>
-  <summary>Markov Decision Process</summary>
-  
-  ## State Space
-  
-  The agent receives a comprehensive state representation designed to handle real-world timing delays and sensor limitations:
-  
-  ### Puck History Buffer
-  A buffer of 5 historical puck positions at indices **0, 1, 2, 5, 11**, corresponding to approximate delays of:
-  - 8 ms
-  - 17 ms  
-  - 25 ms
-  - 50 ms
-  - 100 ms
-  
-  **Rationale**: Direct velocity calculation is unreliable in certain scenarios (e.g., puck bouncing off corners). Providing raw positional history allows the network to implicitly infer velocity and acceleration.
-  
-  ### Opponent Information
-  Historical opponent mallet positions at the same buffer indices (0, 1, 2, 5, 11).
-  
-  ### Agent State
-  - **Mallet position**: Previous position (delayed—see Firmware and Timing section)
-  - **Mallet velocity**: Calculated from delayed position data
-  - **Previous action**: Ensures the MDP is fully defined, as `previous_action + past_position` determines current position
-  
-  ### Domain Parameters
-  Current system identification coefficients `(a₁, a₂, a₃, b₁, b₂, b₃)` being used (see system id section). These are included because they vary across training domains (see Domain Randomization section).
-  
-  ## Action Space
-  
-  The agent outputs three continuous values:
-  
-  - **`xf`**: Desired final mallet position
-  - **`M_{V_x}`**: Voltage parameter for x-axis motion
-  - **`M_{V_y}`**: Voltage parameter for y-axis motion
-  
-  These define a trajectory as described in the Simulation Implementation section, guaranteeing physically feasible paths within system constraints.
-  
-  ## Reward Function
-  
-  ### Initial Approach (Sparse Rewards)
-  Initially, rewards were:
-  - **+1** if puck enters opponent's goal
-  - **-1** if agent gets scored on
-  
-  **Problem**: Defense is easier than offense, making rewards extremely sparse and hindering learning.
-  
-  ### Improved Approach (Dense Rewards via Rollouts)
-  
-  When the puck crosses the halfway line toward the opponent:
-  
-  1. **Rollout Simulation**: Perform Monte Carlo estimation with 20 rollouts, assuming the opponent remains stationary
-  2. **Reward Calculation**: 
-     ```
-     reward = E[success] × (20 + puck_velocity/2)
-     ```
-     where `E[success]` is the expected probability of scoring from the rollouts assuming the opponent does not move.
-  3. **Episode Termination**: Episode ends when puck crosses halfway, but simulation continues without reset
-  
-  **Benefits**:
-  - Dense reward signal for offensive play
-  - Velocity bonus encourages aggressive shots
-  - Continuing simulation (without reset) maintains diverse state distribution
-  - Prevents reward hacking where agent only cares to shoot frequently just to trigger halfway-line rewards
-  
-  *Note: Collision outcomes include stochasticity (see System Identification section), necessitating the Monte Carlo approach for accurate reward estimation.*
+# Markov Decision Process
 
-  ---
-  
-  ## Training Opponents
-  
-  ### Self-Play
-  The primary training method is **self-play**, where the agent plays against copies of itself. This creates a curriculum of increasing difficulty as the agent improves.
-  
-  **Limitation**: Self-play alone results in overfitting to a single opponent strategy.
-  
-  ### Diverse Opponent Pool
-  To ensure robust performance, the agent trains against multiple opponent types:
-  
-  #### 1. Random Positional Agent
-  - Selects a random area of the table (weighted towards the goal)
-  - Moves randomly within that region
-  - Provides unpredictable, non-strategic behavior
-  
-  #### 2. Defensive DQN Agent (~50k parameters)
-  - **State space**: Same observation as the main agent
-  - **Action space**: Three discrete actions (move left | move right | stay)
-  - **Positioning**: Near goal line for defensive play
-  - **Reward function**:
-    - Negative reward proportional to opponent's expected success probability (encourages blocking shots)
-    - Positive reward for reducing opponent's scoring chances
-  - **Behavior switch**: When puck enters its side, switches to the main policy network for offensive play
-  
-  This opponent diversity prevents strategy overfitting and ensures the agent can handle various playing styles.
-  </details>
+## State Space
 
-- <details>
-  <summary>Hyperparameters</summary>
+The agent receives a comprehensive state representation designed to handle real-world timing delays and sensor limitations:
 
-  ## Network Architecture
-  
-  ### Policy Network
-  A fully-connected deep neural network with **~1.8M parameters**:
-  
-  ```python
-  Layer 1:  Linear(obs_dim → 1024) + LayerNorm + ReLU
-  Layer 2:  Linear(1024 → 1024) + LayerNorm + ReLU
-  Layer 3:  Linear(1024 → 512) + LayerNorm + ReLU
-  Layer 4:  Linear(512 → 256) + ReLU
-  Layer 5:  Linear(256 → 128) + ReLU
-  Output:   Linear(128 → action_dim × 2) + ScaledNormalParamExtractor
-  ```
-  
-  **Design notes**:
-  - LayerNorm used in early layers for stable training with high-dimensional observations
-  - Output layer produces mean and standard deviation for a Gaussian policy
-  - `ScaledNormalParamExtractor` applies domain-specific scaling to action parameters
-  
-  ### Value Network
-  Similar architecture to the policy network, used for advantage estimation with Generalized Advantage Estimation (GAE).
-  
-  ## Training Algorithm
-  
-  **Proximal Policy Optimization (PPO)** with the following hyperparameters:
-  
-  | Hyperparameter | Value | Notes |
-  |----------------|-------|-------|
-  | `lr_policy` | 5e-5 | Conservative to prevent divergence |
-  | `lr_value` | 5e-5 | Matched to policy learning rate |
-  | `gamma` | 0.997 | High discount factor for long-horizon planning |
-  | `lambda` (GAE) | 0.7 | Balances bias-variance in advantage estimates |
-  | `epsilon` (clip) | 0.05 | Tight clipping for stability |
-  | `entropy_coeff` | 0.01 | Encourages exploration |
-  | `batch_size` | 1024 | Large batches enabled by fast simulation |
-  
-  ### Design Considerations
-  
-  **Conservative Learning Rates**: Initial experiments with higher learning rates (>1e-4) led to rapid policy divergence. The low learning rate of 5e-5 provides stable, gradual improvement.
-  
-  **On-Policy Training**: While PPO is sample-inefficient compared to off-policy methods, the simulation's 450× speedup provides ample data throughput, making sample efficiency less critical. This allows us to leverage PPO's simplicity and stability.
-  
-  **Large Batch Sizes**: The vectorized simulation generates data quickly, enabling large batch sizes that improve gradient estimates and training stability.
-  </details>
+### Puck History Buffer
+A buffer of 5 historical puck positions at indices **0, 1, 2, 5, 11**, corresponding to approximate delays of:
+- 8 ms
+- 17 ms  
+- 25 ms
+- 50 ms
+- 100 ms
 
-- <details>
-  <summary>Domain Randomization</summary>
-  
-  # Domain Randomization
+**Rationale**: Direct velocity calculation is unreliable in certain scenarios (e.g., puck bouncing off corners). Providing raw positional history allows the network to implicitly infer velocity and acceleration.
 
-  To ensure the trained policy transfers robustly to the physical system, we apply extensive domain randomization based on empirically measured noise characteristics.
-  
-  ## Puck Position Noise
-  
-  ### Dual-Layer Noise Model
-  Puck observations are corrupted with two noise sources:
-  
-  1. **White Noise**: Gaussian noise with standard deviation measured from stationary puck position variance
-  2. **Perlin Noise**: Spatially correlated noise applied per-environment, with standard deviation based on calibration measurements of puck tracking accuracy vs. ground truth (see System Identification)
-  
-  ### Occlusion Handling
-  When the puck is partially occluded by support beams:
-  
-  - **Partial occlusion** (>0% covered): Different white noise standard deviation, measured empirically
-  - **Full occlusion** (>50% covered): Probability of detection failure, in which case the puck buffer repeats the previous frame's data
-  
-  **Note**: In reality, only 100% covered causes detection failure. However, since camera placement varies during setup (changing occlusion angles), this conservative approach ensures resilience to different configurations.
-  
-  Occlusion zones are approximated based on camera positioning geometry.
-  
-  ## Mallet State Noise
-  
-  - **Position noise**: White noise added to mallet position observations, standard deviation from measured sensor data
-  - **Velocity noise**: White noise added to calculated mallet velocity, based on empirical measurements
-  
-  ## Action Execution Noise
-  
-  The feedforward + feedback control system does not perfectly track desired paths (see System Identification). To model this:
-  
-  1. Add white noise to the agent's output `Vx` and `Vy` parameters
-  2. Standard deviations determined by:
-     - Segmenting real vs. expected trajectories into small path segments
-     - Optimizing each segment to find the `Vx`, `Vy` that best explain the actual motion
-     - Computing standard deviation across all segments
-  
-  This ensures the agent experiences realistic path-following errors during training.
-  
-  ## System Dynamics Randomization
-  
-  ### Feedforward Coefficients
-  Domain randomization is applied to the feedforward coefficients `(a₁, a₂, a₃, b₁, b₂, b₃)`. Critically:
-  
-  - **Agent observes its own coefficients**: The current domain's coefficients are provided as part of the state
-  - **Opponent coefficients are hidden**: The agent does not know the opponent's dynamics
-  
-  **Benefits**:
-  - **Adaptability**: If hardware changes shift system dynamics, new coefficients can be provided without retraining
-  - **Strategic diversity**: Agent faces faster and slower opponents, learning to counter different playstyles
-  - **Preparation**: Must plan for uncertainty in opponent capabilities
-  
-  ### Timing Delays
-  All timing delays are randomized according to measured distributions (see Firmware and Timing section):
-  - Mean delay
-  - Standard deviation
-  - Min/max bounds
-  
-  This ensures the agent learns to act effectively despite information latency.
-  </details>
+### Opponent Information
+Historical opponent mallet positions at the same buffer indices (0, 1, 2, 5, 11).
 
-</details>
+### Agent State
+- **Mallet position**: Previous position (delayed—see Firmware and Timing section)
+- **Mallet velocity**: Calculated from delayed position data
+- **Previous action**: Ensures the MDP is fully defined, as `previous_action + past_position` determines current position
+
+### Domain Parameters
+Current system identification coefficients `(a₁, a₂, a₃, b₁, b₂, b₃)` being used (see system id section). These are included because they vary across training domains (see Domain Randomization section).
+
+## Action Space
+
+The agent outputs three continuous values:
+
+- **`xf`**: Desired final mallet position
+- **`M_{V_x}`**: Voltage parameter for x-axis motion
+- **`M_{V_y}`**: Voltage parameter for y-axis motion
+
+These define a trajectory as described in the Simulation Implementation section, guaranteeing physically feasible paths within system constraints.
+
+## Reward Function
+
+### Initial Approach (Sparse Rewards)
+Initially, rewards were:
+- **+1** if puck enters opponent's goal
+- **-1** if agent gets scored on
+
+**Problem**: Defense is easier than offense, making rewards extremely sparse and hindering learning.
+
+### Improved Approach (Dense Rewards via Rollouts)
+
+When the puck crosses the halfway line toward the opponent:
+
+1. **Rollout Simulation**: Perform Monte Carlo estimation with 20 rollouts, assuming the opponent remains stationary
+2. **Reward Calculation**: 
+   ```
+   reward = E[success] × (20 + puck_velocity/2)
+   ```
+   where `E[success]` is the expected probability of scoring from the rollouts assuming the opponent does not move.
+3. **Episode Termination**: Episode ends when puck crosses halfway, but simulation continues without reset
+
+**Benefits**:
+- Dense reward signal for offensive play
+- Velocity bonus encourages aggressive shots
+- Continuing simulation (without reset) maintains diverse state distribution
+- Prevents reward hacking where agent only cares to shoot frequently just to trigger halfway-line rewards
+
+*Note: Collision outcomes include stochasticity (see System Identification section), necessitating the Monte Carlo approach for accurate reward estimation.*
+
+---
+
+## Training Opponents
+
+### Self-Play
+The primary training method is **self-play**, where the agent plays against copies of itself. This creates a curriculum of increasing difficulty as the agent improves.
+
+**Limitation**: Self-play alone results in overfitting to a single opponent strategy.
+
+### Diverse Opponent Pool
+To ensure robust performance, the agent trains against multiple opponent types:
+
+#### 1. Random Positional Agent
+- Selects a random area of the table (weighted towards the goal)
+- Moves randomly within that region
+- Provides unpredictable, non-strategic behavior
+
+#### 2. Defensive DQN Agent (~50k parameters)
+- **State space**: Same observation as the main agent
+- **Action space**: Three discrete actions (move left | move right | stay)
+- **Positioning**: Near goal line for defensive play
+- **Reward function**:
+  - Negative reward proportional to opponent's expected success probability (encourages blocking shots)
+  - Positive reward for reducing opponent's scoring chances
+- **Behavior switch**: When puck enters its side, switches to the main policy network for offensive play
+
+This opponent diversity prevents strategy overfitting and ensures the agent can handle various playing styles.
+
+# Hyperparameters
+
+## Network Architecture
+
+### Policy Network
+A fully-connected deep neural network with **~1.8M parameters**:
+
+```python
+Layer 1:  Linear(obs_dim → 1024) + LayerNorm + ReLU
+Layer 2:  Linear(1024 → 1024) + LayerNorm + ReLU
+Layer 3:  Linear(1024 → 512) + LayerNorm + ReLU
+Layer 4:  Linear(512 → 256) + ReLU
+Layer 5:  Linear(256 → 128) + ReLU
+Output:   Linear(128 → action_dim × 2) + ScaledNormalParamExtractor
+```
+
+**Design notes**:
+- LayerNorm used in early layers for stable training with high-dimensional observations
+- Output layer produces mean and standard deviation for a Gaussian policy
+- `ScaledNormalParamExtractor` applies domain-specific scaling to action parameters
+
+### Value Network
+Similar architecture to the policy network, used for advantage estimation with Generalized Advantage Estimation (GAE).
+
+## Training Algorithm
+
+**Proximal Policy Optimization (PPO)** with the following hyperparameters:
+
+| Hyperparameter | Value | Notes |
+|----------------|-------|-------|
+| `lr_policy` | 5e-5 | Conservative to prevent divergence |
+| `lr_value` | 5e-5 | Matched to policy learning rate |
+| `gamma` | 0.997 | High discount factor for long-horizon planning |
+| `lambda` (GAE) | 0.7 | Balances bias-variance in advantage estimates |
+| `epsilon` (clip) | 0.05 | Tight clipping for stability |
+| `entropy_coeff` | 0.01 | Encourages exploration |
+| `batch_size` | 1024 | Large batches enabled by fast simulation |
+
+### Design Considerations
+
+**Conservative Learning Rates**: Initial experiments with higher learning rates (>1e-4) led to rapid policy divergence. The low learning rate of 5e-5 provides stable, gradual improvement.
+
+**On-Policy Training**: While PPO is sample-inefficient compared to off-policy methods, the simulation's 450× speedup provides ample data throughput, making sample efficiency less critical. This allows us to leverage PPO's simplicity and stability.
+
+**Large Batch Sizes**: The vectorized simulation generates data quickly, enabling large batch sizes that improve gradient estimates and training stability.
+
+# Domain Randomization
+
+To ensure the trained policy transfers robustly to the physical system, we apply extensive domain randomization based on empirically measured noise characteristics.
+
+## Puck Position Noise
+
+### Dual-Layer Noise Model
+Puck observations are corrupted with two noise sources:
+
+1. **White Noise**: Gaussian noise with standard deviation measured from stationary puck position variance
+2. **Perlin Noise**: Spatially correlated noise applied per-environment, with standard deviation based on calibration measurements of puck tracking accuracy vs. ground truth (see System Identification)
+
+### Occlusion Handling
+When the puck is partially occluded by support beams:
+
+- **Partial occlusion** (>0% covered): Different white noise standard deviation, measured empirically
+- **Full occlusion** (>50% covered): Probability of detection failure, in which case the puck buffer repeats the previous frame's data
+
+**Note**: In reality, only 100% covered causes detection failure. However, since camera placement varies during setup (changing occlusion angles), this conservative approach ensures resilience to different configurations.
+
+Occlusion zones are approximated based on camera positioning geometry.
+
+## Mallet State Noise
+
+- **Position noise**: White noise added to mallet position observations, standard deviation from measured sensor data
+- **Velocity noise**: White noise added to calculated mallet velocity, based on empirical measurements
+
+## Action Execution Noise
+
+The feedforward + feedback control system does not perfectly track desired paths (see System Identification). To model this:
+
+1. Add white noise to the agent's output `Vx` and `Vy` parameters
+2. Standard deviations determined by:
+   - Segmenting real vs. expected trajectories into small path segments
+   - Optimizing each segment to find the `Vx`, `Vy` that best explain the actual motion
+   - Computing standard deviation across all segments
+
+This ensures the agent experiences realistic path-following errors during training.
+
+## System Dynamics Randomization
+
+### Feedforward Coefficients
+Domain randomization is applied to the feedforward coefficients `(a₁, a₂, a₃, b₁, b₂, b₃)`. Critically:
+
+- **Agent observes its own coefficients**: The current domain's coefficients are provided as part of the state
+- **Opponent coefficients are hidden**: The agent does not know the opponent's dynamics
+
+**Benefits**:
+- **Adaptability**: If hardware changes shift system dynamics, new coefficients can be provided without retraining
+- **Strategic diversity**: Agent faces faster and slower opponents, learning to counter different playstyles
+- **Preparation**: Must plan for uncertainty in opponent capabilities
+
+### Timing Delays
+All timing delays are randomized according to measured distributions (see Firmware and Timing section):
+- Mean delay
+- Standard deviation
+- Min/max bounds
+
+This ensures the agent learns to act effectively despite information latency.
 

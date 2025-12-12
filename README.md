@@ -38,6 +38,7 @@ Below we give short outlines for each system, many of the technical details are 
 * [🧠 Reinforcement Learning](#-reinforcement-learning)
 
 # ⚙️ Electro-Mechanical System
+[table of contents](#table-of-contents)
 
 This project is part of a multiyear effort. Our team **inherited the electromechanical subsystem** from the previous group (this was the only major component we retained) though we made several adjustments and improvements.
 

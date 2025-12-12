@@ -29,13 +29,13 @@ Below we give short outlines for each system, many of the technical details are 
 
 ## Table of Contents
 
-* [⚙️ Electro-Mechanical System](#electro-mechanical-system)
-* [🎯 Computer Vision](#computer-vision)
-* [🧩 Mallet System ID](#mallet-system-id)
-* [🔘 Puck System ID](#puck-system-id)
-* [💻 Firmware and System Timings](#firmware-and-system-timings)
-* [🎮 Simulation](#simulation)
-* [🧠 Reinforcement Learning](#reinforcement-learning)
+* [⚙️ Electro-Mechanical System](#-electro-mechanical-system)
+* [🎯 Computer Vision](#-computer-vision)
+* [🧩 Mallet System ID](#-mallet-system-id)
+* [🔘 Puck System ID](#-puck-system-id)
+* [💻 Firmware and System Timings](#-firmware-and-system-timings)
+* [🎮 Simulation](#-simulation)
+* [🧠 Reinforcement Learning](#-reinforcement-learning)
 
 # ⚙️ Electro-Mechanical System
 

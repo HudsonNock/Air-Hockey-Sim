@@ -29,7 +29,7 @@ Below we give short outlines for each system, many of the technical details are 
 
 ## Table of Contents
 
-* [⚙️ Electro-Mechanical System](#-electro-mechanical-system)
+* [⚙️ Electro-Mechanical System](#%EF%B8%8F-electro-mechanical-system)
 * [🎯 Computer Vision](#-computer-vision)
 * [🧩 Mallet System ID](#-mallet-system-id)
 * [🔘 Puck System ID](#-puck-system-id)
@@ -100,6 +100,7 @@ To improve system reliability, accuracy, and maintainability, several mechanical
 These improvements would provide a more robust and consistent physical platform for reinforcement learning experiments, simulation validation, and long-term autonomous gameplay testing.
 
 # 🎯 Computer Vision
+[table of contents](#table-of-contents)
 
 Our computer vision system enables precise tracking of the puck and opponent mallet using a single camera placed on a tripod.
 
@@ -157,6 +158,7 @@ By detecting concentric contours, we can differentiate between puck and mallet a
 For a full description of the calibration math, optimization routine, and occlusion-robust tracking algorithm, see the [Final Report](link-to-report).
 
 # 🧩 Mallet System ID
+[table of contents](#table-of-contents)
 
 To accurately simulate the environment, we needed to model the **mallet and puck dynamics**.  
 The mallet motion can be characterized as a **third-order transfer function** relating motor voltage to mallet position
@@ -203,6 +205,7 @@ Combining feedforward and feedback control yielded **millimeter-level tracking a
 This model forms the foundation of the simulated environment and ensures that reinforcement learning agents experience realistic, physics-based dynamics.
 
 # 🔘 Puck System ID
+[table of contents](#table-of-contents)
 
 ## Puck ODE
 
@@ -279,6 +282,7 @@ The resulting model captures both deterministic and stochastic aspects of puck d
 Together, these models provide a realistic simulation of puck behavior suitable for reinforcement learning and physics-based gameplay.
 
 # 💻 Firmware and System Timings
+[table of contents](#table-of-contents)
 
 ## System Architecture
 
@@ -351,6 +355,7 @@ With code optimizations and the RT kernel, the main loop processes in **6-7 ms**
 - Process pinned to isolated cores for consistent performance
 
 # 🎮 Simulation
+[table of contents](#table-of-contents)
 
 ## Overview
 
@@ -397,6 +402,7 @@ Traditional simulations use fixed `dt` timesteps, creating a trade-off between p
 *Additional implementation details and derivations are provided in the final report.*
 
 # 🧠 Reinforcement Learning
+[table of contents](#table-of-contents)
   
 # Markov Decision Process
 

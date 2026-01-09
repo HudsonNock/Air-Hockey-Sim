@@ -15,8 +15,8 @@ import torch.nn.functional as F
 # Initialize pygame
 print("STARTING")
 
-height = 0.992
-width = 1.993
+height = 1.145
+width = 2.3655
 
 bounds = np.array([width, height])
 plr = 500
@@ -144,15 +144,21 @@ def initalize(envs, mallet_r=0.05, puck_r=0.05, goal_w=0.35, V_max=24, pully_rad
             # Concatenate predictions and sigmas
             return torch.cat([preds, sigmas], dim=1)
 
-    res_model = HeteroscedasticNN(input_dim=2, hidden_dim=8, output_dim=2)
-    res_model.load_state_dict(torch.load('collision_model_heteroscedastic.pt'))
-    res_model.to('cpu')
-    res_model.eval()
+    #res_model = HeteroscedasticNN(input_dim=2, hidden_dim=8, output_dim=2)
+    #res_model.load_state_dict(torch.load('collision_model_heteroscedastic.pt'))
+    #res_model.to('cpu')
+    #res_model.eval()
 
-    mallet_res_model = HeteroscedasticNN(input_dim=2, hidden_dim=8, output_dim=2)
-    mallet_res_model.load_state_dict(torch.load('mallet_collision_model_heteroscedastic.pt'))
-    mallet_res_model.to('cpu')
-    mallet_res_model.eval()
+    #mallet_res_model = HeteroscedasticNN(input_dim=2, hidden_dim=8, output_dim=2)
+    #mallet_res_model.load_state_dict(torch.load('mallet_collision_model_heteroscedastic.pt'))
+    #mallet_res_model.to('cpu')
+    #mallet_res_model.eval()
+
+    global puck_wall_res
+    global puck_mallet_res
+
+    puck_wall_res = 0.94
+    puck_mallet_res = 0.8
                 
     global C5
     global C6
@@ -350,10 +356,12 @@ def corner_collision(A, pos, vel, t, C, D, v_norm, dir, dPdt,B,f,mass, vt):
     t_vel = np.dot(vel_r, tangent)
     angle_in = np.degrees(np.arctan(abs(t_vel/n_vel)))
 
-    with torch.no_grad():
-        col_out = res_model(torch.FloatTensor(np.array([angle_in, v_in])[np.newaxis,:])).numpy()[0]
-    angle_out = np.clip(np.random.normal(col_out[0], col_out[2]), -89, 89)
-    v_out = max(np.random.normal(col_out[1], col_out[3]), 0.001)    
+    #with torch.no_grad():
+    #    col_out = res_model(torch.FloatTensor(np.array([angle_in, v_in])[np.newaxis,:])).numpy()[0]
+    #angle_out = np.clip(np.random.normal(col_out[0], col_out[2]), -89, 89)
+    #v_out = max(np.random.normal(col_out[1], col_out[3]), 0.001)    
+    angle_out = angle_in
+    v_out = v_in * puck_mallet_res
 
     new_vel = n * v_out * np.cos(angle_out * np.pi/180.0) * (-n_vel / abs(n_vel)) + tangent * v_out * np.sin(angle_out * np.pi/180.0) * (t_vel / abs(t_vel))
 
@@ -601,10 +609,13 @@ def puck_mallet_collision(mask, pos, vel, dir, dt_col, t_init, C, D, Bm, fm, mas
             t_vel = np.sum(v_rel*tangent, axis=-1)
             angle_in = np.degrees(np.arctan(np.abs(t_vel/n_vel)))
 
-            with torch.no_grad():
-                col_out = mallet_res_model(torch.FloatTensor(np.stack((angle_in, v_in), axis=1))).numpy()
-            angle_out = np.clip(np.random.normal(col_out[:,0], col_out[:,2]), -89, 89)
-            v_out = np.maximum(np.random.normal(col_out[:,1], col_out[:,3]), 0.001)    
+            #with torch.no_grad():
+            #    col_out = mallet_res_model(torch.FloatTensor(np.stack((angle_in, v_in), axis=1))).numpy()
+            #angle_out = np.clip(np.random.normal(col_out[:,0], col_out[:,2]), -89, 89)
+            #v_out = np.maximum(np.random.normal(col_out[:,1], col_out[:,3]), 0.001)  
+
+            angle_out = angle_in
+            v_out = v_in * puck_mallet_res  
 
             v_rel_col = normal * (v_out * np.cos(angle_out * np.pi/180.0) * (-n_vel / abs(n_vel)))[:,None] + tangent * (v_out * np.sin(angle_out * np.pi/180.0) * (t_vel / abs(t_vel)))[:,None]
 
@@ -633,10 +644,12 @@ def puck_mallet_collision(mask, pos, vel, dir, dt_col, t_init, C, D, Bm, fm, mas
             t_vel = np.sum(v_rel*tangent, axis=-1)
             angle_in = np.degrees(np.arctan(np.abs(t_vel/n_vel)))
 
-            with torch.no_grad():
-                col_out = mallet_res_model(torch.FloatTensor(np.stack((angle_in, v_in), axis=1))).numpy()
-            angle_out = np.clip(np.random.normal(col_out[:,0], col_out[:,2]), -89, 89)
-            v_out = np.maximum(np.random.normal(col_out[:,1], col_out[:,3]), 0.001)    
+            #with torch.no_grad():
+            #    col_out = mallet_res_model(torch.FloatTensor(np.stack((angle_in, v_in), axis=1))).numpy()
+            #angle_out = np.clip(np.random.normal(col_out[:,0], col_out[:,2]), -89, 89)
+            #v_out = np.maximum(np.random.normal(col_out[:,1], col_out[:,3]), 0.001)    
+            angle_out = angle_in
+            v_out = v_in * puck_mallet_res
 
             v_rel_col = normal * (v_out * np.cos(angle_out * np.pi/180.0) * (-n_vel / abs(n_vel)))[:,None] + tangent * (v_out * np.sin(angle_out * np.pi/180.0) * (t_vel / abs(t_vel)))[:,None]
 
@@ -907,10 +920,12 @@ def update_puck(t, mask, t_init, no_M = False, noM_pos = None, noM_vel = None, i
         t_vel = np.where(wall == 0, new_vel_bc[:,1], new_vel_bc[:,0])
         angle_in = np.degrees(np.arctan(np.abs(t_vel/n_vel)))
 
-        with torch.no_grad():
-            col_out = res_model(torch.FloatTensor(np.stack((angle_in, v_in), axis=1))).numpy()
-        angle_out = np.clip(np.random.normal(col_out[:,0], col_out[:,2]), -89, 89)
-        v_out = np.maximum(np.random.normal(col_out[:,1], col_out[:,3]), 0.001)    
+        #with torch.no_grad():
+        #    col_out = res_model(torch.FloatTensor(np.stack((angle_in, v_in), axis=1))).numpy()
+        #angle_out = np.clip(np.random.normal(col_out[:,0], col_out[:,2]), -89, 89)
+        #v_out = np.maximum(np.random.normal(col_out[:,1], col_out[:,3]), 0.001) 
+        angle_out = angle_in
+        v_out = v_in * puck_wall_res   
 
         new_vel_bc = normal * (v_out * np.cos(angle_out * np.pi / 180.0) * (-n_vel / abs(n_vel)))[:,None] + tangent * (v_out * np.sin(angle_out * np.pi / 180.0) * (t_vel / abs(t_vel)))[:,None]
         
@@ -960,107 +975,8 @@ def update_puck(t, mask, t_init, no_M = False, noM_pos = None, noM_vel = None, i
         new_pos[pm_mask] = pm_pos[pm_mask]
         new_vel[pm_mask] = pm_vel[pm_mask]
         #side_wall[pm_mask] = False
-
-        #return new_pos, new_vel, recurr_time_m, recurr_mask_m #, pm_mask, side_wall
-
-        crossed_to_left = (new_pos[:,0] < surface[0]/2 - puck_radius) & (vel[:,0] < 0) & (pos[:,0] > surface[0]/2 - puck_radius)
-        crossed_to_right = (new_pos[:,0] > surface[0]/2 + puck_radius) & (vel[:,0] > 0) & (pos[:,0] < surface[0]/2 + puck_radius)
-
-        if calculate_cross_left:
-            cross_left = np.full_like(recurr_time_m, -1)
-        cross_right = np.full_like(recurr_time_m, -1)
-
-        if calculate_cross_left and np.any(crossed_to_left):
-            dist = np.sqrt(np.sum((pos[crossed_to_left] - new_pos[crossed_to_left])**2, axis=1)) * (pos[crossed_to_left,0] - (surface[0]/2-puck_radius)) / (pos[crossed_to_left,0] - new_pos[crossed_to_left,0])
-            speed = np.sqrt(np.sum(vel[crossed_to_left]**2, axis=1))
-            Bmw = Bm[crossed_to_left]
-            fmw = fm[crossed_to_left]
-            massmw = massm[crossed_to_left]
-            Cw = C[crossed_to_left]
-            Dw = D[crossed_to_left]
-            #tw = t[crossed_to_left]
-            dirw = dir[crossed_to_left]
-            #resw = resm[crossed_to_left]
-            #root = chandrupatla(distance_to_wall, dist/(speed+0.0001), tw, args=(dist, \
-            #                        Bmw, fmw, massmw, Cw, Dw),eps_m = 1e-6, eps_a=2e-6)
-            root = dist / speed
-            #B, f, mass, C, D
-            center_pos = pos[crossed_to_left] + dirw * np.tile(dP(root, Bmw, fmw,\
-                                                        massmw, Cw, Dw)[:, np.newaxis], (1, 2))
-
-            center_vel = np.tile(velocity(root, Bmw, fmw, massmw, Cw)[:, np.newaxis], (1, 2)) * dirw
-
-            CEm = CE[mask][crossed_to_left]
-            A2CEm = A2CE[mask][crossed_to_left]
-            A3CEm = A3CE[mask][crossed_to_left]
-            A4CEm = A4CE[mask][crossed_to_left]
-            abm = ab[mask][crossed_to_left]
-            C1m = C1[mask][crossed_to_left]
-            C2m = C2[mask][crossed_to_left]
-            C3m = C3[mask][crossed_to_left]
-            C4m = C4[mask][crossed_to_left]
-            am = a[mask][crossed_to_left]
-            a2m = a2[mask][crossed_to_left]
-
-            x_mc = get_pos_mask(t_init[crossed_to_left]+root, CEm, A2CEm, A3CEm, A4CEm, abm, am, a2m, C1m, C2m, C3m, C4m)
-
-            if indicies:
-                noM_pos, _, hitM = step_noM(1.0, center_pos, center_vel, mask[crossed_to_left], x_mc)
-            else:
-                noM_pos, _, hitM = step_noM(1.0, center_pos, center_vel, np.where(mask)[0][crossed_to_left].astype(np.int32), x_mc)
-            entered_goal = noM_pos[:,0] < 0
-            cross_left[crossed_to_left] = np.where(entered_goal, np.where(hitM, -0.25, np.sum(center_vel**2, axis=1)), -0.5)
-
-        times_scored = np.zeros_like(crossed_to_right, dtype=np.uint16)
-
-        if np.any(crossed_to_right):
-            dist = np.sqrt(np.sum((pos[crossed_to_right] - new_pos[crossed_to_right])**2, axis=1)) * (pos[crossed_to_right,0] - (surface[0]/2+puck_radius)) / (pos[crossed_to_right,0] - new_pos[crossed_to_right,0])
-            speed = np.sqrt(np.sum(vel[crossed_to_right]**2, axis=1))
-            Bmw = Bm[crossed_to_right]
-            fmw = fm[crossed_to_right]
-            massmw = massm[crossed_to_right]
-            Cw = C[crossed_to_right]
-            Dw = D[crossed_to_right]
-            #tw = t[crossed_to_right]
-            dirw = dir[crossed_to_right]
-            #resw = resm[crossed_to_right]
-            #root = chandrupatla(distance_to_wall, dist/(speed+0.0001), tw, args=(dist, \
-            #                        Bmw, fmw, massmw, Cw, Dw), eps_m = 1e-6, eps_a=2e-6)
-            root = dist/speed
-            #B, f, mass, C, D
-            center_pos = pos[crossed_to_right] + dirw * np.tile(dP(root, Bmw, fmw,\
-                                                        massmw, Cw, Dw)[:, np.newaxis], (1, 2))
-
-            center_vel = np.tile(velocity(root, Bmw, fmw, massmw, Cw)[:, np.newaxis], (1, 2)) * dirw
-
-            CEm = CE[mask][crossed_to_right]
-            A2CEm = A2CE[mask][crossed_to_right]
-            A3CEm = A3CE[mask][crossed_to_right]
-            A4CEm = A4CE[mask][crossed_to_right]
-            abm = ab[mask][crossed_to_right]
-            C1m = C1[mask][crossed_to_right]
-            C2m = C2[mask][crossed_to_right]
-            C3m = C3[mask][crossed_to_right]
-            C4m = C4[mask][crossed_to_right]
-            am = a[mask][crossed_to_right]
-            a2m = a2[mask][crossed_to_right]
-
-            x_mc = get_pos_mask(t_init[crossed_to_right]+root, CEm, A2CEm, A3CEm, A4CEm, abm, am, a2m, C1m, C2m, C3m, C4m)
-
-            for puck_rollout in range(20):
-                if indicies:
-                    noM_pos, _, hitM = step_noM(1.0, center_pos, center_vel, mask[crossed_to_right], x_mc)
-                else:
-                    noM_pos, _, hitM = step_noM(1.0, center_pos, center_vel, np.where(mask)[0][crossed_to_right].astype(np.int32), x_mc)
-                entered_goal = noM_pos[:,0] > surface[0]
-                times_scored[crossed_to_right] += np.logical_and(entered_goal, np.logical_not(hitM))
-
-            cross_right[crossed_to_right] = np.sum(center_vel**2, axis=1)
-
-        if calculate_cross_left:
-            return new_pos, new_vel, recurr_time_m, recurr_mask_m, cross_left, cross_right
-        else:
-            return new_pos, new_vel, recurr_time_m, recurr_mask_m, times_scored/20.0, cross_right 
+        
+        return new_pos, new_vel, recurr_time_m, recurr_mask_m
 
     if noM_xm is not None:
         mpd = np.sum((noM_xm[:,0,:]-pos) * dir, axis=1)
@@ -1611,7 +1527,7 @@ def update_path(time, xf, Vo, reset_mask):
     a = solve_a()
     a2 = 2*a - x_f*C7/C1+C2/C1
 
-def step(t, calculate_cross_left = False):
+def step(t):
     global time
     global puck_pos
     global mallet_pos
@@ -1622,52 +1538,10 @@ def step(t, calculate_cross_left = False):
     recurr_time = np.full((game_number), t, dtype="float32")
     #mallet_hit = np.full((game_number, 2), False)
     #puck_wall_collision = np.full((game_number, 2), False)
-    cross_right = np.full((game_number), -1.0)
     counter = 0
     indexed = False
     #print("--")
 
-    if calculate_cross_left:
-        cross_left = np.full((game_number), -1.0)
-        while np.any(recurr_mask):
-            counter += 1
-            if counter == 100:
-                puck_pos[recurr_mask] = np.array([1,-1])
-                puck_vel[recurr_mask] = np.array([0,0])
-            #clock.tick(60)
-            if recurr_mask.sum() / len(recurr_mask) < 0.1 and not indexed:
-                indexed = True
-                recurr_mask = np.array(np.where(recurr_mask)[0])
-            #print(indexed)
-            if not indexed:
-                puck_pos[recurr_mask], puck_vel[recurr_mask], recurr_time[recurr_mask], recurr_mask2, cross_left_n, cross_right_n = update_puck(recurr_time[recurr_mask], recurr_mask, time + (t-recurr_time)[recurr_mask])
-                cross_right[recurr_mask] = np.maximum(cross_right_n, cross_right[recurr_mask])
-                cross_left[recurr_mask] = np.maximum(cross_left_n, cross_left[recurr_mask])
-                #puck_wall_collision[recurr_mask] = puck_wall_collision[recurr_mask] | puck_wc
-                #if np.any(pm_mask):
-                #    mallet_hit[recurr_mask,0] = np.logical_or(pm_mask, mallet_hit[recurr_mask][:,0]) & (puck_pos[recurr_mask][:,0] < surface[0]/2)
-                #    mallet_hit[recurr_mask,1] = np.logical_or(pm_mask, mallet_hit[recurr_mask][:,1]) & (puck_pos[recurr_mask][:,0] > surface[0]/2)
-                recurr_mask[recurr_mask] = recurr_mask2
-            else:
-                puck_pos[recurr_mask], puck_vel[recurr_mask], recurr_time[recurr_mask], recurr_mask2, cross_left_n, cross_right_n = update_puck(recurr_time[recurr_mask], recurr_mask, time + (t-recurr_time)[recurr_mask], indicies=True)
-                cross_right[recurr_mask] = np.maximum(cross_right_n, cross_right[recurr_mask])
-                cross_left[recurr_mask] = np.maximum(cross_left_n, cross_left[recurr_mask])
-                #puck_wall_collision[recurr_mask] = puck_wall_collision[recurr_mask] | puck_wc
-                #if np.any(pm_mask):
-                #    mallet_hit[recurr_mask[pm_mask],0] = (puck_pos[recurr_mask[pm_mask]][:,0] < surface[0]/2)
-                #    mallet_hit[recurr_mask[pm_mask],1] = (puck_pos[recurr_mask[pm_mask]][:,0] > surface[0]/2)
-                recurr_mask = recurr_mask[recurr_mask2]
-            #print(clock.tick(60)/1000.0)
-            #print(counter)
-            
-            #print("---")
-        time += t
-        mallet_pos[np.logical_not(reset_mask)] = get_pos(np.full((game_number), time))[np.logical_not(reset_mask)]
-        mallet_vel[np.logical_not(reset_mask)] = get_xp(np.full((game_number),time))[np.logical_not(reset_mask)]
-
-        return mallet_pos, mallet_vel, puck_pos, puck_vel, cross_left, cross_right #mallet_hit, puck_wall_collision
-
-    score_avg = np.full((game_number), 0.0)
     while np.any(recurr_mask):
         counter += 1
         if counter == 100:
@@ -1677,20 +1551,16 @@ def step(t, calculate_cross_left = False):
             indexed = True
             recurr_mask = np.array(np.where(recurr_mask)[0])
         if not indexed:
-            puck_pos[recurr_mask], puck_vel[recurr_mask], recurr_time[recurr_mask], recurr_mask2, score_avg_n, cross_right_n = update_puck(recurr_time[recurr_mask], recurr_mask, time + (t-recurr_time)[recurr_mask])
-            cross_right[recurr_mask] = np.where(score_avg_n >= score_avg[recurr_mask], cross_right_n, cross_right[recurr_mask])
-            score_avg[recurr_mask] = np.maximum(score_avg_n, score_avg[recurr_mask])
+            puck_pos[recurr_mask], puck_vel[recurr_mask], recurr_time[recurr_mask], recurr_mask2 = update_puck(recurr_time[recurr_mask], recurr_mask, time + (t-recurr_time)[recurr_mask])
             recurr_mask[recurr_mask] = recurr_mask2
         else:
-            puck_pos[recurr_mask], puck_vel[recurr_mask], recurr_time[recurr_mask], recurr_mask2, score_avg_n, cross_right_n = update_puck(recurr_time[recurr_mask], recurr_mask, time + (t-recurr_time)[recurr_mask], indicies=True)
-            cross_right[recurr_mask] = np.where(score_avg_n >= score_avg[recurr_mask], cross_right_n, cross_right[recurr_mask])
-            score_avg[recurr_mask] = np.maximum(score_avg_n, score_avg[recurr_mask])
+            puck_pos[recurr_mask], puck_vel[recurr_mask], recurr_time[recurr_mask], recurr_mask2 = update_puck(recurr_time[recurr_mask], recurr_mask, time + (t-recurr_time)[recurr_mask], indicies=True)
             recurr_mask = recurr_mask[recurr_mask2]
     time += t
     mallet_pos[np.logical_not(reset_mask)] = get_pos(np.full((game_number), time))[np.logical_not(reset_mask)]
     mallet_vel[np.logical_not(reset_mask)] = get_xp(np.full((game_number),time))[np.logical_not(reset_mask)]
 
-    return mallet_pos, mallet_vel, puck_pos, puck_vel, score_avg, cross_right
+    return mallet_pos, mallet_vel, puck_pos, puck_vel
 
 def impulse(epsilon, delta):
     global puck_vel

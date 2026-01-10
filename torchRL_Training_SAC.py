@@ -21,8 +21,8 @@ import random
 import torch.nn.functional as F4
 import copy
 
-load_filepath = "checkpoints\\SAC_01.pth"
-save_filepath = "checkpoints\\SAC_02.pth" #Best is 12, 15, 22, 44, 76, 103, 121, 134, 142, 160, 165, 178
+load_filepath = "checkpoints\\SAC_04.pth"
+save_filepath = "checkpoints\\SAC_04.pth" #Best is 12, 15, 22, 44, 76, 103, 121, 134, 142, 160, 165, 178
 train = False
 # Simulation parameters
 obs_dim = 38 #[puck_pos, opp_mallet_pos] #guess mean low stdl
@@ -80,11 +80,8 @@ width = 1.145
 bounds = np.array([height, width])
 goal_width = 0.3345
 
-lr_encoder = 1e-4
-lr_decoder = 1e-3
-
-policy_lrs = [5e-4, 5e-4, 5e-4] #policy, def1, def2
-Q_lrs = [5e-4, 5e-4, 5e-4] #policy, def1, def2
+policy_lrs = [1e-3, 1e-3, 1e-3] #policy, def1, def2
+Q_lrs = [1e-3, 1e-3, 1e-3] #policy, def1, def2
 
 gamma = 0.99
 tau = 0.0008
@@ -92,34 +89,22 @@ tau = 0.0008
 batch_size = 128
 
 #q, pol, dec
-loss_coeffs = [1.0, 0.1, 0.7*0.3,
-          0.5, 0.05, 0.15*0.3,
-          0.5, 0.05, 0.15*0.3]
 
 #------------------
 
 beam_coeffs = np.array([[1+(beam_height-beam_thickness)/(camera_pos[1]-beam_height+beam_thickness), (beam_height-beam_thickness)*(camera_pos[0]-beam_width/2)/(camera_pos[1]-beam_height+beam_thickness) - beam_width/2], [1+(beam_height)/(camera_pos[1]-beam_height), beam_height*(camera_pos[0]+beam_width/2)/(camera_pos[1]-beam_height) + beam_width/2]])
 
-encoder_net = nn.Sequential(
-    nn.Linear(obs_dim, 512),
-    nn.LayerNorm(512),
-    nn.LeakyReLU(0.01),
-    nn.Linear(512, 256),
-    nn.LayerNorm(256),
-    nn.LeakyReLU(0.01),
-    nn.Linear(256, 128),
-    nn.LeakyReLU(0.01),
-)
-
-decoder_net = nn.Sequential(
-    nn.Linear(128,512),
-    nn.LeakyReLU(0.01),
-    nn.Linear(512, obs_dim)
-).to('cuda')
-
 policy_modules = [] #[policy, def1, def2]
 for _ in range(3):
     policy_modules.append(nn.Sequential(
+                            nn.Linear(obs_dim, 512),
+                            nn.LayerNorm(512),
+                            nn.LeakyReLU(0.01),
+                            nn.Linear(512, 256),
+                            nn.LayerNorm(256),
+                            nn.LeakyReLU(0.01),
+                            nn.Linear(256, 128),
+                            nn.LeakyReLU(0.01),
                             nn.Linear(128, 64),
                             nn.LeakyReLU(),
                             nn.Linear(64, action_dim * 2),
@@ -130,9 +115,15 @@ for _ in range(3):
 Q_modules = [] # [policy 1/2, def1 1/2, def2 1/2]
 for _ in range(6):
     Q_modules.append(nn.Sequential(
-                        nn.Linear(128 + action_dim, 64),
-                        nn.LeakyReLU(),
-                        nn.Linear(64, 64),
+                        nn.Linear(obs_dim + action_dim, 512),
+                        nn.LayerNorm(512),
+                        nn.LeakyReLU(0.01),
+                        nn.Linear(512, 256),
+                        nn.LayerNorm(256),
+                        nn.LeakyReLU(0.01),
+                        nn.Linear(256, 128),
+                        nn.LeakyReLU(0.01),
+                        nn.Linear(128, 64),
                         nn.LeakyReLU(),
                         nn.Linear(64, 1)
                     ))
@@ -163,36 +154,29 @@ for pol in policy_modules:
 for q in Q_modules:
     q.apply(init_policy)
 
-encoder_net.apply(init_policy)
-decoder_net.apply(init_policy)
-
-encoder_module = TensorDictModule(
-    encoder_net, in_keys=["observation"], out_keys=["features"]
-).to('cuda')
-
 for i in range(3):
     policy_modules[i] = TensorDictModule(
-                            policy_modules[i], in_keys=["features"], out_keys=["loc", "scale"]
+                            policy_modules[i], in_keys=["observation"], out_keys=["loc", "scale"]
                         ).to('cuda')
 
 class QNetWrapper(nn.Module):
     def __init__(self, net):
         super().__init__()
         self.net = net
-    def forward(self, features, action):
+    def forward(self, observation, action):
         # Concatenate features and actions along the last dimension
-        combined = torch.cat([features, action], dim=-1)
+        combined = torch.cat([observation, action], dim=-1)
         return self.net(combined)
 
 # Wrap your existing nets
 for i in range(6):
     Q_modules[i] = TensorDictModule(
                         QNetWrapper(Q_modules[i]), 
-                        in_keys=["features", "action"], 
+                        in_keys=["observation", "action"], 
                         out_keys=["q_value"]
                     ).to('cuda')
     Q_modules[i] = TensorDictModule(
-                        Q_modules[i], in_keys=["features", "action"], out_keys=["q_value"]
+                        Q_modules[i], in_keys=["observation", "action"], out_keys=["q_value"]
                     ).to('cuda')
 
 low = torch.tensor([mallet_r+0.01, mallet_r+0.01, 0, -1, 0], dtype=torch.float32).to('cuda')
@@ -236,14 +220,12 @@ target_entropy = -float(action_dim)
 
 log_alphas = []
 for _ in range(3):
-    log_alphas.append(torch.full((1,), -7.0, requires_grad=True, device='cuda'))
+    log_alphas.append(torch.full((1,), -6.0, requires_grad=True, device='cuda'))
 
 alpha_optimizers = []
 for i in range(3):
     alpha_optimizers.append(torch.optim.Adam([log_alphas[i]], lr=3e-4))
 
-optimizer_encoder = torch.optim.Adam(encoder_module.parameters(), lr=lr_encoder)
-optimizer_decoder = torch.optim.Adam(decoder_net.parameters(), lr=lr_decoder)
 policy_optimizers = []
 for i in range(3):
     policy_optimizers.append(torch.optim.Adam(policy_modules[i].parameters(), lr=policy_lrs[i]))
@@ -292,8 +274,6 @@ def update_sac_agent(i, batch_size, gamma=0.99, tau=0.005):
     
     # --- 1. Critic Update ---
     with torch.no_grad():
-        next_features = encoder_module(next_batch.get("observation"))
-        next_batch.set("features", next_features)
         actor(next_batch)
         
         next_log_prob = next_batch.get("sample_log_prob")
@@ -304,15 +284,6 @@ def update_sac_agent(i, batch_size, gamma=0.99, tau=0.005):
         alpha = log_alpha.exp()
         target_q = torch.min(target_q1, target_q2) - (alpha * next_log_prob)[:,None]
         y = next_batch.get("reward") + (1 - next_batch.get("done").float()) * gamma * target_q
-
-    raw_features = encoder_module(batch.get("observation"))
-
-    # 4. Apply Scaling "Gates" to the SAME features
-    q_feat = ScaleGrad.apply(raw_features, loss_coeffs[3*i])
-    p_feat = ScaleGrad.apply(raw_features, loss_coeffs[3*i+1])
-    #r_feat = ScaleGrad.apply(raw_features, loss_coeffs[3*i+2])
-
-    batch.set("features", q_feat)
     
     q1_val = q1(batch).get("q_value")
     q2_val = q2(batch).get("q_value")
@@ -322,13 +293,9 @@ def update_sac_agent(i, batch_size, gamma=0.99, tau=0.005):
     q_loss.backward(retain_graph=True)
     torch.nn.utils.clip_grad_norm_(list(q1.parameters()) + list(q2.parameters()), 1.0)
     Q_optimizers[i].step()
-
-    batch.set("features", p_feat)
     
     actor_td = actor(batch)
     log_prob = actor_td.get("sample_log_prob")
-
-    actor_td.set("features", p_feat.detach())
     
     q1_pi = q1(actor_td).get("q_value")
     q2_pi = q2(actor_td).get("q_value")
@@ -373,13 +340,9 @@ def update_sac_agent(i, batch_size, gamma=0.99, tau=0.005):
 
 def save_checkpoint(path):
     checkpoint = {
-        'encoder': encoder_module.state_dict(),
-        'decoder': decoder_net.state_dict(),
         'policies': [p.state_dict() for p in policy_modules],
         'critics': [q.state_dict() for q in Q_modules],
         'log_alphas': [la for la in log_alphas],
-        'opt_enc': optimizer_encoder.state_dict(),
-        'opt_dec': optimizer_decoder.state_dict(),
         'opt_pols': [opt.state_dict() for opt in policy_optimizers],
         'opt_qs': [opt.state_dict() for opt in Q_optimizers],
         'opt_alphas': [opt.state_dict() for opt in alpha_optimizers],
@@ -389,10 +352,6 @@ def save_checkpoint(path):
 
 def load_checkpoint(path):
     checkpoint = torch.load(path)
-    
-    encoder_module.load_state_dict(checkpoint['encoder'])
-
-    decoder_net.load_state_dict(checkpoint['decoder'])
     
     for i in range(3):
         policy_modules[i].load_state_dict(checkpoint['policies'][i])
@@ -408,15 +367,6 @@ def load_checkpoint(path):
     for i in range(3):
          Q_optimizers[i].load_state_dict(checkpoint['opt_qs'][i])
             
-    optimizer_encoder.load_state_dict(checkpoint['opt_enc'])
-    optimizer_decoder.load_state_dict(checkpoint['opt_dec'])
-
-    for param_group in optimizer_encoder.param_groups:
-        param_group['lr'] = lr_encoder
-
-    for param_group in optimizer_decoder.param_groups:
-        param_group['lr'] = lr_decoder
-
     for i in range(3):
         for param_group in policy_optimizers[i].param_groups:
             param_group['lr'] = policy_lrs[i]
@@ -808,7 +758,6 @@ if train:
 
                 tensor_obs = TensorDict({"observation": torch.tensor(past_obs, dtype=torch.float32)}).to('cuda')
 
-                encoder_module(tensor_obs)
                 policy_out = policy_modules[0](tensor_obs)
                 actions = policy_out["action"].detach().to('cpu')
                 #policy_out["sample_log_prob"] = torch.maximum(policy_out["sample_log_prob"], torch.tensor(-8, dtype=torch.float32))
@@ -819,11 +768,9 @@ if train:
                 def1_tensor_obs = TensorDict({"observation": torch.tensor(past_obs[envs+self_play:envs+self_play+int((envs-self_play)/2)], dtype=torch.float32)}).to('cuda')
                 def2_tensor_obs = TensorDict({"observation": torch.tensor(past_obs[envs+self_play+int((envs-self_play)/2):2*envs], dtype=torch.float32)}).to('cuda')
 
-                encoder_module(def1_tensor_obs)
                 def1_out = policy_modules[1](def1_tensor_obs)
                 def1_actions = def1_out["action"].detach().to('cpu')
 
-                encoder_module(def2_tensor_obs)
                 def2_out = policy_modules[2](def2_tensor_obs)
                 def2_actions = def2_out["action"].detach().to('cpu')
 
@@ -1145,7 +1092,6 @@ if train:
         for j in range(int(1024*10/batch_size)):
             #policy
             # In your training loop:
-            optimizer_encoder.zero_grad()
 
             # Accumulate gradients from all 3 agents into the encoder
             for i in range(3):
@@ -1153,10 +1099,6 @@ if train:
                 samples[i,j,0] = q_loss_val
                 samples[i,j,1] = policy_loss_val
                 samples[i,j,2] = alpha_val
-
-            # Clip the accumulated encoder gradients once
-            torch.nn.utils.clip_grad_norm_(encoder_module.parameters(), max_norm=0.5)
-            optimizer_encoder.step()
 
             if j == int(1024*10/batch_size) - 1:
                 print("---")
@@ -1175,7 +1117,6 @@ for update in range(500000):  # Training loop
         with torch.no_grad():
             tensor_obs = TensorDict({"observation": torch.tensor(past_obs, dtype=torch.float32)}).to('cuda')
 
-            encoder_module(tensor_obs)
             policy_out = policy_modules[0](tensor_obs)
             actions = policy_out["action"].detach().to('cpu')
             policy_out["sample_log_prob"] = torch.maximum(policy_out["sample_log_prob"], torch.tensor(-8, dtype=torch.float32))
@@ -1189,11 +1130,9 @@ for update in range(500000):  # Training loop
             def1_tensor_obs = TensorDict({"observation": torch.tensor(past_obs[4], dtype=torch.float32)}).to('cuda')
             def2_tensor_obs = TensorDict({"observation": torch.tensor(past_obs[5], dtype=torch.float32)}).to('cuda')
 
-            encoder_module(def1_tensor_obs)
             def1_out = policy_modules[1](def1_tensor_obs)
             def1_actions = def1_out["action"].detach().to('cpu')
 
-            encoder_module(def2_tensor_obs)
             def2_out = policy_modules[2](def2_tensor_obs)
             def2_actions = def2_out["action"].detach().to('cpu')
 

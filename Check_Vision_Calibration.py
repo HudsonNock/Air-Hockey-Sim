@@ -39,16 +39,19 @@ def main():
         print(img.shape)
         
         pxls = np.load(f"new_data/pxls_data_{j}.npy")
+        #pxls[:,0] = pxls[:,0] - 376
+        
         locations = np.load(f"new_data/location_data_{j}.npy")
+        print(len(pxls))
+        
+        #np.save(f"new_data/pxls_data_{j}.npy", pxls)
         
         for pxl in pxls:
-            cv2.circle(img, (int(pxl[0]) - 376, int(pxl[1])), 10, (255, 0, 255), -1)
+            cv2.circle(img, (int(pxl[0]), int(pxl[1])), 10, (255, 0, 255), -1)
 
-        #locations[:,0] = table_bounds[0] - locations[:,0]
-        #locations[:,1] = table_bounds[1] - locations[:,1]
-        #np.save(f"new_data/location_data_{j}.npy", locations)
         
-        print(locations)
+        
+        #print(pxls)
 
         cv2.imshow('v1', img[::2, ::2])
         cv2.waitKey(0)

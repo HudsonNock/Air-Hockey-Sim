@@ -19,7 +19,7 @@ import torch
 import extrinsic
 
 
-table_bounds = np.array([1.9885, 0.995])
+table_bounds = np.array([2.362, 1.144])
 
 margin = 0.065
 margin_bottom = 0.1
@@ -31,15 +31,15 @@ mallet_bounds = np.array([[margin_bounds + mallet_r, table_bounds[0]/2  + mallet
 err = []
 
 def main():
-    for j in range(4,5):
-        img_shape = (1536, 1296)
+    for j in range(3,4):
+        img_shape = (1536, 2048)
 
-        img = np.load(f"img_data_{j}.npy")
+        img = np.load(f"new_data/img_data_{j}.npy")
         img = np.repeat(img[:,:,None], 3, axis=2)
         print(img.shape)
         
-        pxls = np.load(f"pxls_data_{j}.npy")
-        locations = np.load(f"location_data_{j}.npy")
+        pxls = np.load(f"new_data/pxls_data_{j}.npy")
+        locations = np.load(f"new_data/location_data_{j}.npy")
         
         for pxl in pxls:
             cv2.circle(img, (int(pxl[0]) - 376, int(pxl[1])), 10, (255, 0, 255), -1)

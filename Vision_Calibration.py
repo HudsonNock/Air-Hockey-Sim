@@ -18,10 +18,10 @@ import tensordict
 from tensordict import TensorDict
 import torch
 
-table_bounds = np.array([1.993, 0.992])
+table_bounds = np.array([2.362, 1.144])
 
-mallet_r = 0.1011 / 2 #0.0508
-puck_r = 0.0636 / 2
+mallet_r = 0.1010 / 2 #0.0508
+puck_r = 0.0826 / 2
 margin_bounds = 0.0
 
 num_points = 11
@@ -89,11 +89,11 @@ def configure_buffer_handling(cam):
     else:
         print("Unable to set Buffer Handling Mode")
 
-def configure_camera(cam, gain_val=30.0, exposure_val=100.0):
+def configure_camera(cam, gain_val=30.0, exposure_val=100.0, gamma_val=None, black_level_val=0, balance_ratio_val=3.6):
     # Get the camera node map
     nodemap = cam.GetNodeMap()
     
-    auto_modes = ["ExposureAuto", "GainAuto", "BalanceWhiteAuto", "GammaEnable"]
+    auto_modes = ["ExposureAuto", "GainAuto", "BalanceWhiteAuto"]
     for mode in auto_modes:
         try:
             auto_node = PySpin.CEnumerationPtr(nodemap.GetNode(mode))
@@ -104,6 +104,32 @@ def configure_camera(cam, gain_val=30.0, exposure_val=100.0):
                     print(f"{mode} disabled")
         except:
             print("Unable to disable " + mode)
+            
+    if gamma_val is None:
+        try:
+            auto_node = PySpin.CEnumerationPtr(nodemap.GetNode("GammaEnable"))
+            if PySpin.IsAvailable(auto_node) and PySpin.IsWritable(auto_node):
+                off_entry = auto_node.GetEntryByName("Off")
+                if PySpin.IsAvailable(off_entry):
+                    auto_node.SetIntValue(off_entry.GetValue())
+                    print("GammaEnable disabled")
+        except:
+            print("Unable to disable GammaEnable")
+    else:
+        try:
+            auto_node = PySpin.CEnumerationPtr(nodemap.GetNode("GammaEnable"))
+            if PySpin.IsAvailable(auto_node) and PySpin.IsWritable(auto_node):
+                on_entry = auto_node.GetEntryByName("On")
+                if PySpin.IsAvailable(on_entry):
+                    auto_node.SetIntValue(on_entry.GetValue())
+                    print("GammaEnable enabled")
+                    
+                    gamma = PySpin.CFloatPtr(nodemap.GetNode("Gamma"))
+                    if PySpin.IsAvailable(gamma) and PySpin.IsWritable(gamma):
+                        gamma.SetValue(gamma_val)
+                        print(f"Set Gamma to {gamma_val}")
+        except:
+            print("Unable to set Gamma")
 
     exposure_time = PySpin.CFloatPtr(nodemap.GetNode("ExposureTime"))
     if PySpin.IsAvailable(exposure_time) and PySpin.IsWritable(exposure_time):
@@ -117,19 +143,6 @@ def configure_camera(cam, gain_val=30.0, exposure_val=100.0):
         gain.SetValue(gain_val)
     else:
         print("Unable to set Gain.")
-        
-    # Try to disable image processing features that add latency
-    #processing_features = ["GammaEnable"] #, "SharpnessEnable", "SaturationEnable", 
-                          #"HueEnable", "DefectCorrectStaticEnable"]
-    
-    #for feature in processing_features:
-    #    try:
-    #        feature_node = PySpin.CBooleanPtr(nodemap.GetNode(feature))
-    #        if PySpin.IsAvailable(feature_node) and PySpin.IsWritable(feature_node):
-    #            feature_node.SetValue(False)
-    #            print(f"{feature} disabled")
-    #    except:
-    #        print("Unable to disable " + feature)
     
     try:
         balance_ratio = PySpin.CEnumerationPtr(nodemap.GetNode("BalanceRatioSelector"))
@@ -144,8 +157,8 @@ def configure_camera(cam, gain_val=30.0, exposure_val=100.0):
     try:
         balance_ratio = PySpin.CFloatPtr(nodemap.GetNode("BalanceRatio"))
         if PySpin.IsAvailable(balance_ratio) and PySpin.IsWritable(balance_ratio):
-            balance_ratio.SetValue(3.6)
-            print("balance ratio set to 3.6")
+            balance_ratio.SetValue(balance_ratio_val)
+            print(f"balance ratio set to {balance_ratio_val}")
     except:
         print("Unable to set balance ratio")
             
@@ -156,6 +169,37 @@ def configure_camera(cam, gain_val=30.0, exposure_val=100.0):
         print(f"Set throughput limit to {max_value}")
     else:
         print("Unable to read or write throughput limit mode.")
+        
+                
+    try:
+        auto_node = PySpin.CEnumerationPtr(nodemap.GetNode("BlackLevelSelector"))
+        if PySpin.IsAvailable(auto_node) and PySpin.IsWritable(auto_node):
+            all_entry = auto_node.GetEntryByName("All")
+            if PySpin.IsAvailable(all_entry):
+                auto_node.SetIntValue(all_entry.GetValue())
+                print("Black Level set to all")
+    except:
+        print("Unable to set black level to all")
+
+    # 1. Turn off Auto Black Level first (otherwise BlackLevel is often read-only)
+    auto_mode_node = PySpin.CEnumerationPtr(nodemap.GetNode("BlackLevelAuto"))
+    if PySpin.IsAvailable(auto_mode_node) and PySpin.IsWritable(auto_mode_node):
+        off_entry = auto_mode_node.GetEntryByName("Off")
+        if PySpin.IsAvailable(off_entry) and PySpin.IsReadable(off_entry):
+            auto_mode_node.SetIntValue(off_entry.GetValue())
+            print("Automatic Black Level turned Off.")
+
+    # 2. Access the BlackLevel value node
+    # Note: Usually this is a Float, not an Enumeration
+    black_level_node = PySpin.CFloatPtr(nodemap.GetNode("BlackLevel"))
+
+    if PySpin.IsAvailable(black_level_node) and PySpin.IsWritable(black_level_node):
+        # Ensure the value is within the camera's allowed range
+        val_to_set = max(black_level_node.GetMin(), min(black_level_node.GetMax(), black_level_val))
+        black_level_node.SetValue(val_to_set)
+        print(f"Set Black level to {val_to_set}")
+    else:
+        print("BlackLevel node is still not writable. Check 'BlackLevelSelector'.")
 
 
 def set_pixel_format(cam, mode="BayerRG8"):
@@ -345,11 +389,11 @@ def begin_calibrations(cam):
     ser = serial.Serial(PORT, BAUD, timeout=0)
     
     time.sleep(1)
-    img_shape = (1536, 1296)
+    img_shape = (1536, 2048)
     
     set_pixel_format(cam, mode="Mono8")
-    configure_camera(cam, gain_val=1.0, exposure_val=10000.0)
-    set_frame_rate(cam, target_fps=20.0)
+    configure_camera(cam, gain_val=4.0, exposure_val=8000.0, balance_ratio_val=2.5)
+    set_frame_rate(cam, target_fps=10.0)
     
     cam.BeginAcquisition()
     
@@ -368,22 +412,25 @@ def begin_calibrations(cam):
     #    image.Release()
     
     setup = tracker.SetupCamera()
+
     while not setup.see_aruco_pixels(img):
         cv2.imshow("arucos", img[::2, ::2])
         cv2.waitKey(0)
         image = cam.GetNextImage()
-        img = np.clip(image.GetData().reshape(img_shape) * bright_filter, 0, 255).astype(np.uint8)
+        img = image.GetData().reshape(img_shape)
         image.Release()
         
         
-    np.save(f"img_data_{j}.npy", np.array(img))
+    np.save(f"new_data/img_data_{j}.npy", np.array(img))
         
     cv2.destroyAllWindows()
     
     cam.EndAcquisition()
+    
+    #configure_camera(cam, gain_val=30.0, exposure_val=100.0, gamma_val=None, black_level_val=0, balance_ratio_val=3.6)
                                   
     set_pixel_format(cam, mode="BayerRG8")
-    configure_camera(cam, gain_val=33.0, exposure_val=100.0)
+    configure_camera(cam, gain_val=25.0, exposure_val=100.0, gamma_val=1.0, black_level_val=-5, balance_ratio_val=3.4)
     set_frame_rate(cam, target_fps=120.0)
     
     print("Remove mallet + puck from view")
@@ -402,30 +449,30 @@ def begin_calibrations(cam):
     #cv2.imshow("thresh", cutoff_thres[::2, ::2])
     #cv2.imshow("img", img[::2, ::2])
     #cv2.waitKey(0)
-    print("Move mallet up or down")
-    input()
     
-    del y_max
     
     for _ in range(10):
         image = cam.GetNextImage()
         img = image.GetData().reshape(img_shape)
         image.Release()
     
-    y_max2 = np.max(img[:, int(img.shape[1]/2-30):int(img.shape[1]/2+30)], axis=1)
-    cutoff2 = np.array([np.max(y_max2[max(0,i-30):min(i+30, len(y_max2))]) for i in range(len(y_max2))])
+    print("Move mallet up and down slowly all the way (8s)")
     
-    #cutoff_thres = np.minimum(np.tile(cutoff2[:,None], (1,1296)), 225) + 25
-    #cv2.imshow("thresh", cutoff_thres[::2, ::2])
-    #cv2.imshow("img", img[::2, ::2])
-    #cv2.waitKey(0)
+    for _ in range(120*8):
+        image = cam.GetNextImage()
+        img = image.GetData().reshape(img_shape)
+        image.Release()
+        
+        y_max = np.max(img[:, int(img.shape[1]/2-30):int(img.shape[1]/2+30)], axis=1)
+        cutoff2 = np.array([np.max(y_max[max(0,i-30):min(i+30, len(y_max))]) for i in range(len(y_max))])
+        
+        cutoff = np.maximum(cutoff, cutoff2)
     
-    cutoff = np.maximum(cutoff, cutoff2)
-    #cutoff_thres = np.minimum(np.tile(cutoff[:,None], (1,1296)), 225) + 25
-    #cv2.imshow("thresh", cutoff_thres[::2, ::2])
-    #cv2.waitKey(0)
+    cutoff_thres = np.minimum(np.tile(cutoff[:,None], (1,1296)), 235) + 15
+    cv2.imshow("thresh", cutoff_thres[::2, ::2])
+    cv2.waitKey(0)
     
-    del y_max2
+    del y_max
     del cutoff2
     
     setup.set_thresh_map(cutoff)
@@ -487,29 +534,32 @@ def begin_calibrations(cam):
     
     for _ in range(11):
         get_mallet(ser)
+        
+    #25 cm x 15 cm, 2 in cutout
+    #14.955, 24.935
+    block_w = 0.1494625
+    block_l = 0.2493
+    block_cutout = 0.05089
     
     target_puck_points = []
-    for x in [0.035+puck_r, 0.01+puck_r+0.199, 0.01+puck_r+2*0.199, 0.01+puck_r+3*0.199, 0.01+puck_r+4*0.199, 0.01+puck_r+5*0.199, 0.01+puck_r+7*0.199, 0.01+puck_r+9*0.199]:
-        for y in [puck_r, 0.199-0.04+puck_r, 2*0.199-0.04+puck_r]:
+    for x in [0.1+puck_r, 0.1+(block_l+block_w)+puck_r, 0.1+(block_l+block_w)*2+puck_r, 0.1+(block_l+block_w)*3+puck_r, 0.1+(block_l+block_w)*4+puck_r, 0.1+(block_l+block_w)*5+puck_r]:
+        for y in [puck_r, block_l-block_cutout+puck_r, 2*block_l-block_cutout+puck_r]:
             target_puck_points.append([x,y])
             
-    for x in [0.035+puck_r, 0.01+puck_r+0.199, 0.01+puck_r+2*0.199, 0.01+puck_r+3*0.199, 0.01+puck_r+4*0.199, 0.01+puck_r+5*0.199, 0.01+puck_r+7*0.199, 0.01+puck_r+9*0.199]:
-        for y in [table_bounds[1]-puck_r, table_bounds[1]-0.199+0.04-puck_r, table_bounds[1]-2*0.199+0.04-puck_r]:
+    for x in [0.1+puck_r, 0.1+(block_l+block_w)+puck_r, 0.1+(block_l+block_w)*2+puck_r, 0.1+(block_l+block_w)*3+puck_r, 0.1+(block_l+block_w)*4+puck_r, 0.1+(block_l+block_w)*5+puck_r]:
+        for y in [table_bounds[1]-puck_r, table_bounds[1]-(block_l-block_cutout+puck_r), table_bounds[1]-(2*block_l-block_cutout+puck_r)]:
             target_puck_points.append([x,y])
     
     gc.collect()
     
-    #pxls = np.zeros((8*6,2))
-    #locations = np.zeros((8*6, 2))
+    pxls = np.zeros((6*3*2,2))
+    locations = np.zeros((6*3*2, 2))
     
-    pxls = np.load(f"pxls_data_{j}.npy")
-    locations = np.load(f"location_data_{j}.npy")
+    #pxls = np.load(f"pxls_data_{j}.npy")
+    #locations = np.load(f"location_data_{j}.npy")
     
-    pxls[42,:] = 0
-    locations[42,:] = 0
-    
-    pxls[43,:] = 0
-    locations[43,:] = 0
+    #pxls[3*3:, :] = 0
+    #locations[3*3:, :] = 0
     
     gc.collect()
     
@@ -519,33 +569,40 @@ def begin_calibrations(cam):
         if pxls[idx, 0] != 0:
             continue
         mp = np.array([target_puck[0], target_puck[1]])
-        if target_puck[0] < 0.4:
-            mp[0] += 0.199 - 0.04 + puck_r + mallet_r
-            if abs(target_puck[1] - 0.992/2) > 0.4:
-                mp[0] += 0.04
+        if target_puck[0] < block_w+puck_r+0.01:
+            mp[0] += block_w - block_cutout + puck_r + mallet_r
+            if abs(target_puck[1] - table_bounds[1]/2) > 0.4:
+                mp[0] += block_cutout
         else:
-            mp[0] -= 0.199 - 0.04 + puck_r + mallet_r
-            if abs(target_puck[1] - 0.992/2) > 0.4:
-                mp[0] -= 0.04
+            mp[0] -= block_w - block_cutout + puck_r + mallet_r
+            if abs(target_puck[1] - table_bounds[1]/2) > 0.4:
+                mp[0] -= block_cutout
+            
+        while mp[0] > table_bounds[0]/2:
+            mp[0] -= block_l
+            
+        if ((target_puck[1] > table_bounds[1]/2) and (target_puck[1] < table_bounds[1]-puck_r-0.01)):
+            mp[1] += block_l/2
+        elif (target_puck[1] < puck_r+0.01):
+            mp[1] = block_w/2
+        elif (target_puck[1] > table_bounds[1] - puck_r - 0.01):
+            mp[1] = table_bounds[1] - block_w/2
+        else:
+            mp[1] -= block_l/2 
         
-        if target_puck[0] > 1.2 and target_puck[0] < 1.6:
-            mp[0] -= 0.199
-        elif target_puck[0] > 1.6:
-            mp[0] -= 3*0.199
-            
-        if (target_puck[1] > 0.5 and abs(target_puck[1] - 0.992/2) > 0.4) or (target_puck[1] < 0.5 and abs(target_puck[1] - 0.992/2) < 0.4):
-            mp[1] -= 0.199 / 2
+        if abs(target_puck[1] - table_bounds[1]/2) > 0.4:
+            print(f"{((abs(target_puck[0] - mp[0]) - puck_r - mallet_r - block_w) / (block_l)):.2f}")
         else:
-            mp[1] += 0.199/2
-            
-        print((abs(target_puck[0] - mp[0]) - puck_r - mallet_r) / 0.199)
+            print(f"{((abs(target_puck[0] - mp[0]) - puck_r - mallet_r + block_cutout - block_w) / (block_l)):.2f}")
+        #print(f"L: {(((abs(target_puck[0] - mp[0]) - puck_r - mallet_r + block_cutout) / (block_l+block_w)) - int((abs(target_puck[0] - mp[0]) - puck_r - mallet_r + block_cutout) / (block_l+block_w)))*(block_l+block_w) / block_l}")
+        #print(f"W: {(((abs(target_puck[0] - mp[0]) - puck_r - mallet_r + block_cutout) / (block_l+block_w)) - int((abs(target_puck[0] - mp[0]) - puck_r - mallet_r + block_cutout) / (block_l+block_w)))*(block_l+block_w) / block_w}")
         
         while True:
             close_enough = False
-            print("A1")
+            #print("A1")
             get_mallet(ser)
             pos, vel, acc = get_init_conditions()
-            print("B1")
+            #print("B1")
                 
             top_down_image = np.ones((int(table_bounds[1] * 500), int(table_bounds[0] * 500), 3), dtype=np.uint8) * 255
             
@@ -570,7 +627,7 @@ def begin_calibrations(cam):
             else:
                 cv2.circle(top_down_image, (x_img, y_img), int(mallet_r * 500), (100, 0, 100), -1)
             
-            print("C1")
+            #print("C1")
             img_passed = False
             while not img_passed:
                 try:
@@ -581,7 +638,7 @@ def begin_calibrations(cam):
                         image.Release()
                         raise Exception("Incomplete image")
                         
-                    print("D1")
+                    #print("D1")
                     img = image.GetNDArray().reshape(img_shape)
                     img_passed=True
                     image.Release()
@@ -593,10 +650,10 @@ def begin_calibrations(cam):
                     
                     cam.BeginAcquisition()
                     
-            print("D3")
+            #print("D3")
             
             pxl = setup.get_puck_pixel(img)
-            print("D4")
+            #print("D4")
             
             if (pxl is not None) and passed:
                 print("A")
@@ -616,7 +673,7 @@ def begin_calibrations(cam):
                             image.Release()
                             raise Exception("Incomplete image")
                             
-                        print("B3")
+                        #print("B3")
                         img = image.GetNDArray().reshape(img_shape)
                         img_passed=True
                         image.Release()
@@ -632,16 +689,16 @@ def begin_calibrations(cam):
                 pxl = setup.get_puck_pixel(img)
                 print(pxl)
                 if pxl is not None:
-                    print("A2")
+                    #print("A2")
                     get_mallet(ser)
                     pos, vel, acc = get_init_conditions()
-                    print("B2")
+                    #print("B2")
                     pxls[idx] = pxl
                     location = np.array([table_bounds[0] - (pos[0] + target_puck[0]-mp[0]), table_bounds[1] - target_puck[1]])
                     locations[idx] = location
                     
-                    np.save(f"pxls_data_{j}.npy", np.array(pxls))  
-                    np.save(f"location_data_{j}.npy", np.array(locations))
+                    np.save(f"new_data/pxls_data_{j}.npy", np.array(pxls))  
+                    np.save(f"new_data/location_data_{j}.npy", np.array(locations))
                     
                     img_np = np.array(img)
                     cv2.circle(img_np, (int(pxl[0]), int(pxl[1])), 20, (0, 255, 0), -1)
@@ -650,9 +707,9 @@ def begin_calibrations(cam):
                     break
             
             cv2.imshow("top_down_table", top_down_image)
-            print("E1")
+            #print("E1")
             cv2.waitKey(1)
-            print("F1") 
+            #print("F1") 
     
     cam.EndAcquisition()
 
@@ -676,7 +733,7 @@ def main():
     cam.Init()
     
     configure_buffer_handling(cam)
-    set_roi(cam,1296,1536,376,0)
+    set_roi(cam,2048,1536,0,0)
 
     begin_calibrations(cam)
 

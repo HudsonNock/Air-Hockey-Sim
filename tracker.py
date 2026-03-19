@@ -70,9 +70,10 @@ class SetupCamera:
         self.x_offset = 376
         
         self.thresh_map = None
+        self.img_shape = img_shape
         
     def set_thresh_map(self, cutoff):
-        self.thresh_map = np.minimum(np.tile(cutoff[:,None], (1,1296)), 225) + 25
+        self.thresh_map = np.minimum(np.tile(cutoff[:,None], (1,self.img_shape[0])), 225) + 25
 
     def get_puck_pixel(self, frame):
         mask = cv2.compare(frame, self.thresh_map, cv2.CMP_GE)

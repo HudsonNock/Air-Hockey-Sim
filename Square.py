@@ -16,30 +16,23 @@ import struct
 import tensordict
 from tensordict import TensorDict
 import torch
-import agent_processing as ap
+import agent_processing_no_NN as ap
 import argparse
 
 torch.set_num_threads(2)
 torch.set_num_interop_threads(1)
 
-table_bounds = np.array([1.993, 0.992])
-obs_dim = 51
-obs = np.zeros((obs_dim,), dtype=np.float32)
-obs[32:32+14] = np.array([[0.75, 0.01, 0.7, 0.7, 0.01, 0.65, 0.02, 0.8, 0.01, 0.75, 0.74, 0.01, 0.73, 0.02]])
-#obs[32+7:32+14] = np.array([0.8, 0.3, 0.6, 0.7, 0.2, 0.4, 0.03]) #mallet res
-obs[32+14:] = np.array([ap.a1/ap.pullyR * 1e4, ap.a2/ap.pullyR * 1e1, ap.a3/ap.pullyR * 1e0, ap.b1/ap.pullyR * 1e4, ap.b2/ap.pullyR * 1e1])
-obs[32+14:] *= 1.2
-#e_n0, e_nr, e_nf, e_t0, e_tr, e_tf, std
+table_bounds = np.array([2.362, 1.144])
 
 margin = 0.03
 margin_bottom = 0.03
 
 mallet_r = 0.1011 / 2
-puck_r = 0.0629 / 2
 
 num_points = 11
 
 Vmax = 24 * 0.8
+
 
 class CircularMalletBuffer:
     def __init__(self, length: int):
@@ -66,7 +59,7 @@ class CircularMalletBuffer:
             np.ndarray: Array of shape (N, 3), where N ≤ length.
         """
         return np.vstack((self.buffer[self.index:], self.buffer[:self.index]))
-            
+
 mallet_buffer = CircularMalletBuffer(11)
 stored_buffer = bytearray()
 
@@ -115,200 +108,6 @@ def check_isolation_status():
         print(result)
     except:
         print("Could not check processes on CPU 2")
-
-
-def configure_buffer_handling(cam):
-    nodemap_tldevice = cam.GetTLStreamNodeMap()
-
-    # --- Step 1: Set Buffer Count Mode to Manual ---
-    try:
-        buffer_size_mode = PySpin.CEnumerationPtr(nodemap_tldevice.GetNode("StreamBufferCountMode"))
-        if PySpin.IsAvailable(buffer_size_mode) and PySpin.IsWritable(buffer_size_mode):
-            manual_mode = buffer_size_mode.GetEntryByName("Manual")
-            if PySpin.IsAvailable(manual_mode) and PySpin.IsReadable(manual_mode):
-                buffer_size_mode.SetIntValue(manual_mode.GetValue())
-                print("Buffer size mode set to Manual")
-    except Exception as e:
-        print(f"Unable to set buffer size mode to Manual: {e}")
-
-    # --- Step 2: Set the Buffer Count ---
-    try:
-        buffer_count = PySpin.CIntegerPtr(nodemap_tldevice.GetNode("StreamBufferCountManual"))
-        if PySpin.IsAvailable(buffer_count) and PySpin.IsWritable(buffer_count):
-            min_val = buffer_count.GetMin()
-            print(f"Minimum allowed buffer count: {min_val}")
-            if min_val <= 2:
-                buffer_count.SetValue(2)
-                print("Buffer count set to 2")
-            else:
-                buffer_count.SetValue(min_val)
-                print(f"Buffer count set to minimum allowed: {min_val}")
-    except Exception as e:
-        print(f"Unable to set buffer count: {e}")
-
-    # --- Step 3: Set Stream Buffer Handling Mode ---
-    buffer_handling_mode = PySpin.CEnumerationPtr(nodemap_tldevice.GetNode("StreamBufferHandlingMode"))
-    if PySpin.IsAvailable(buffer_handling_mode) and PySpin.IsWritable(buffer_handling_mode):
-        newest_only = buffer_handling_mode.GetEntryByName("NewestOnly")
-        if PySpin.IsAvailable(newest_only) and PySpin.IsReadable(newest_only):
-            buffer_handling_mode.SetIntValue(newest_only.GetValue())
-            print("Buffer Handling Mode set to NewestOnly")
-        else:
-            print("NewestOnly option not available")
-    else:
-        print("Unable to set Buffer Handling Mode")
-
-def configure_camera(cam, gain_val=30.0, exposure_val=100.0):
-    # Get the camera node map
-    nodemap = cam.GetNodeMap()
-    
-    auto_modes = ["ExposureAuto", "GainAuto", "BalanceWhiteAuto", "GammaEnable"]
-    for mode in auto_modes:
-        try:
-            auto_node = PySpin.CEnumerationPtr(nodemap.GetNode(mode))
-            if PySpin.IsAvailable(auto_node) and PySpin.IsWritable(auto_node):
-                off_entry = auto_node.GetEntryByName("Off")
-                if PySpin.IsAvailable(off_entry):
-                    auto_node.SetIntValue(off_entry.GetValue())
-                    print(f"{mode} disabled")
-        except:
-            print("Unable to disable " + mode)
-
-    exposure_time = PySpin.CFloatPtr(nodemap.GetNode("ExposureTime"))
-    if PySpin.IsAvailable(exposure_time) and PySpin.IsWritable(exposure_time):
-        # ExposureTime is in microseconds
-        exposure_time.SetValue(exposure_val)
-    else:
-        print("Unable to set ExposureTime.")
-
-    gain = PySpin.CFloatPtr(nodemap.GetNode("Gain"))
-    if PySpin.IsAvailable(gain) and PySpin.IsWritable(gain):
-        gain.SetValue(gain_val)
-    else:
-        print("Unable to set Gain.")
-        
-    # Try to disable image processing features that add latency
-    #processing_features = ["GammaEnable"] #, "SharpnessEnable", "SaturationEnable", 
-                          #"HueEnable", "DefectCorrectStaticEnable"]
-    
-    #for feature in processing_features:
-    #    try:
-    #        feature_node = PySpin.CBooleanPtr(nodemap.GetNode(feature))
-    #        if PySpin.IsAvailable(feature_node) and PySpin.IsWritable(feature_node):
-    #            feature_node.SetValue(False)
-    #            print(f"{feature} disabled")
-    #    except:
-    #        print("Unable to disable " + feature)
-    
-    try:
-        balance_ratio = PySpin.CEnumerationPtr(nodemap.GetNode("BalanceRatioSelector"))
-        if PySpin.IsAvailable(balance_ratio) and PySpin.IsWritable(balance_ratio):
-            blue_entry = balance_ratio.GetEntryByName("Blue")
-            if PySpin.IsAvailable(blue_entry):
-                balance_ratio.SetIntValue(blue_entry.GetValue())
-                print("Balance ratio Selector set to Blue")
-    except:
-        print("Unable to set balance ratio selector")
-        
-    try:
-        balance_ratio = PySpin.CFloatPtr(nodemap.GetNode("BalanceRatio"))
-        if PySpin.IsAvailable(balance_ratio) and PySpin.IsWritable(balance_ratio):
-            balance_ratio.SetValue(3.6)
-            print("balance ratio set to 3.6")
-    except:
-        print("Unable to set balance ratio")
-            
-    throughput_limit = PySpin.CIntegerPtr(nodemap.GetNode("DeviceLinkThroughputLimit"))
-    if PySpin.IsAvailable(throughput_limit) and PySpin.IsWritable(throughput_limit):
-        max_value = throughput_limit.GetMax()
-        throughput_limit.SetValue(max_value)
-        print(f"Set throughput limit to {max_value}")
-    else:
-        print("Unable to read or write throughput limit mode.")
-
-
-def set_pixel_format(cam, mode="BayerRG8"):
-    nodemap = cam.GetNodeMap()
-    
-    pixel_format = PySpin.CEnumerationPtr(nodemap.GetNode("PixelFormat"))
-    if PySpin.IsAvailable(pixel_format) and PySpin.IsWritable(pixel_format):
-        # Try Mono8 first (fastest)
-        format_entry = pixel_format.GetEntryByName(mode)
-        if PySpin.IsAvailable(format_entry) and PySpin.IsReadable(format_entry):
-            pixel_format.SetIntValue(format_entry.GetValue())
-            print("Pixel format set to " + mode)
-            
-        else:
-            print("unable to set pixel format to " + mode)
-    else:
-        print("Unable to read pixel format")
-        
-    if mode=="BayerRG8":
-        ISP = PySpin.CBooleanPtr(nodemap.GetNode("IspEnable"))
-        if PySpin.IsAvailable(ISP) and PySpin.IsWritable(ISP):
-            ISP.SetValue(False)
-        else:
-            print("Unable to turn off ISP")
-
-        return False
-
-def configure_gain(cam, gain_val = 30.0):
-    nodemap = cam.GetNodeMap()
-    gain = PySpin.CFloatPtr(nodemap.GetNode("Gain"))
-    if PySpin.IsAvailable(gain) and PySpin.IsWritable(gain):
-        gain.SetValue(gain_val)
-    else:
-        print("Unable to set Gain.")
-
-def set_frame_rate(cam, target_fps=120.0):
-    nodemap = cam.GetNodeMap()
-    
-    # Enable frame rate control
-    frame_rate_enable = PySpin.CBooleanPtr(nodemap.GetNode("AcquisitionFrameRateEnable"))
-    if PySpin.IsAvailable(frame_rate_enable) and PySpin.IsWritable(frame_rate_enable):
-        frame_rate_enable.SetValue(True)
-        print("Frame rate control enabled")
-    else:
-        print("Unable to enable frame rate control")
-        return 0
-
-    # Set specific frame rate
-    frame_rate = PySpin.CFloatPtr(nodemap.GetNode("AcquisitionFrameRate"))
-    if PySpin.IsAvailable(frame_rate) and PySpin.IsWritable(frame_rate):
-        min_fps = frame_rate.GetMin()
-        max_fps = frame_rate.GetMax()
-        print(f"Frame rate range: {min_fps:.2f} - {max_fps:.2f} fps")
-        
-        # Set to target or maximum available
-        actual_fps = min(target_fps, max_fps)
-        frame_rate.SetValue(actual_fps)
-        print(f"Frame rate set to: {actual_fps:.2f} fps")
-        return actual_fps
-    else:
-        print("Unable to set frame rate")
-        return 0
-    
-def set_roi(cam, width, height, offset_x=0, offset_y=0):
-    nodemap = cam.GetNodeMap()
-    
-    # Set width
-    width_node = PySpin.CIntegerPtr(nodemap.GetNode("Width"))
-    if PySpin.IsAvailable(width_node) and PySpin.IsWritable(width_node):
-        width_node.SetValue(width)
-    
-    # Set height  
-    height_node = PySpin.CIntegerPtr(nodemap.GetNode("Height"))
-    if PySpin.IsAvailable(height_node) and PySpin.IsWritable(height_node):
-        height_node.SetValue(height)
-        
-    # Set offsets
-    offset_x_node = PySpin.CIntegerPtr(nodemap.GetNode("OffsetX"))
-    if PySpin.IsAvailable(offset_x_node) and PySpin.IsWritable(offset_x_node):
-        offset_x_node.SetValue(offset_x)
-        
-    offset_y_node = PySpin.CIntegerPtr(nodemap.GetNode("OffsetY"))
-    if PySpin.IsAvailable(offset_y_node) and PySpin.IsWritable(offset_y_node):
-        offset_y_node.SetValue(offset_y)
         
 def deq(q, xmin, xmax):
     y = q/32767
@@ -410,10 +209,12 @@ def system_loop():
 
     # === CONNECT ===
     ser = serial.Serial(PORT, BAUD, timeout=0)
-        
+    
     ser.write(b'\n')
+    print("A")
     while ser.in_waiting == 0:
         continue
+    print("B")
     ser.reset_input_buffer()
 
     ser.write(b'\n')
@@ -456,14 +257,12 @@ def system_loop():
     while ser.in_waiting == 0:
         continue
     ser.reset_input_buffer()
-
     
     input("Enter to Start")
     time.sleep(2.0)
     
     gc.collect()
     
-    cam.BeginAcquisition()
     track = None
     
     ser.reset_input_buffer()
@@ -473,7 +272,22 @@ def system_loop():
     
     for _ in range(11):
         get_mallet(ser)
-        
+    
+    ser.reset_input_buffer()
+    
+    while ser.in_waiting < (num_points+1) * 11:
+            pass
+
+    xf = np.array([table_bounds[0]/4, table_bounds[1]/2])
+    Vo = np.array([1, 1])
+    
+    get_mallet(ser)
+    pos, vel, acc = get_init_conditions()
+    
+    #data = ap.update_path(pos, vel, acc, xf, Vo)
+
+    #ser.write(b'\n' + data + b'\n')
+   
     idx = 0
     while True:
     
@@ -483,11 +297,11 @@ def system_loop():
             pass
 
         if idx == 0:
-            xf = np.array([0.7, 0.3])
+            xf = np.array([0.85, 0.3])
         elif idx == 1:
-            xf = np.array([0.7, 0.7])
+            xf = np.array([0.85, 0.85])
         elif idx == 2:
-            xf = np.array([0.3, 0.7])
+            xf = np.array([0.3, 0.85])
         elif idx == 3:
             xf = np.array([0.3, 0.3])
 	        
@@ -495,7 +309,7 @@ def system_loop():
         if idx == 4:
             idx = 0
 	    
-        Vo = np.array([4, 4])
+        Vo = np.array([3, 3])
 
         get_mallet(ser)
         pos, vel, acc = get_init_conditions()

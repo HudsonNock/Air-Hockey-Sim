@@ -31,7 +31,7 @@ mallet_bounds = np.array([[margin_bounds + mallet_r, table_bounds[0]/2  + mallet
 err = []
 
 def main():
-    for j in range(3,4):
+    for j in range(1,4):
         img_shape = (1536, 2048)
 
         img = np.load(f"new_data/img_data_{j}.npy")
@@ -44,14 +44,21 @@ def main():
         for pxl in pxls:
             cv2.circle(img, (int(pxl[0]) - 376, int(pxl[1])), 10, (255, 0, 255), -1)
 
+        #locations[:,0] = table_bounds[0] - locations[:,0]
+        #locations[:,1] = table_bounds[1] - locations[:,1]
+        #np.save(f"new_data/location_data_{j}.npy", locations)
+        
+        print(locations)
+
         cv2.imshow('v1', img[::2, ::2])
         cv2.waitKey(0)
         
         
         
+        
         #pxls = np.concatenate([pxls[:3], pxls[4:]], axis=0)
         #locations = np.concatenate([locations[:3], locations[4:]], axis=0)
-        
+        """
         setup = tracker.SetupCamera()
         setup.run_extrinsics(img)
         
@@ -83,7 +90,9 @@ def main():
             
             #print(loc)
             #print(loc2)
-            
+         """
+    
+    """ 
     np.save("calibration_err_test.npy", np.array(err)) 
     print(np.array(err))
 
@@ -97,6 +106,7 @@ def main():
     for label, count in zip(labels, counts):
         percentage = 100 * count / total if total > 0 else 0
         print(f"{label:>6} mm: {count:>5} ({percentage:>5.1f}%)")
+    """
 
 if __name__ == "__main__":
     main()

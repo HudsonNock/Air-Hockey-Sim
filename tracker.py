@@ -24,14 +24,9 @@ class CircularCameraBuffer():
         return self.get_arr
 
 class SetupCamera:
-    def __init__(self):
+    def __init__(self, img_shape=(2048,1536), offset=(0,0)):
 
-        self.aruco_3d_points =  np.array([[-0.0775, 0.195 ,0],
-                            [-0.07672, 0.815, 0],
-                            [0.406, 1.08-0.011, 0],
-                            [(207.8 - 8.1)/100, 0.7055, 0],
-                            [(207.8 - 8.1)/100, 0.309, 0],
-                            [0.3592, -0.00554, 0]], dtype=np.float32)
+        self.aruco_3d_points = np.load("aruco_3d_points.npy")
         
         self.intrinsic_matrix = np.array([[1.63911836e+03, 0.0, 1.01832305e+03],
                                 [0.0, 1.63894064e+03, 7.72656464e+02],
@@ -40,40 +35,21 @@ class SetupCamera:
         self.rotation_matrix = cv2.Rodrigues(np.array([-2.4881045, -2.43093864, 0.81342852]))[0]
         self.translation_vector = np.array([-0.54740303, -1.08125622,  2.45483598])
 
-        self.puck_z = 3.75 * 10**(-3) #3.6* 10**(-3)
-        self.puck_r = 0.5 * 0.0636 #0.5 * 0.0629
-        self.table_width = 0.992
-        self.table_height = 1.993 
+        self.puck_z = (6.75-0.9)*10**(-3)
+        self.puck_r = 0.5 * 0.0636
+        self.table_width = 1.144
+        self.table_height = 2.362 
 
-        self.puck_coords = np.array([[self.table_height - (0.161 + 0.0655/2), 0.1575 + 0.0655/2],
-                                    [self.table_height - (0.1755 + 0.0655/2), 0.76 + 0.0655/2],
-                                    [self.table_height - (0.2422 + 0.064/2), 0.466 + 0.064/2],
-                                    [self.table_height - (0.473 + 0.064/2), 0.2197 + 0.064/2],
-                                    [self.table_height - (0.467 + 0.064/2), self.table_width - (0.2095+0.064/2)], # 5
-                                    [self.table_height - (0.7165 + 0.063/2), 0.466 + 0.063/2],
-                                    [self.table_height - (0.8665+0.065/2), 0.221 + 0.065/2],
-                                    [self.table_height - (0.8718 + 0.065/2), self.table_width - (0.187 + 0.065/2)],
-                                    [0.9248 + 0.0254 + 0.065/2, 0.474 + 0.065/2],
-                                    [0.7162 + 0.065/2, 0.208 + 0.065/2], # 10
-                                    [0.768 + 0.065/2, self.table_width - (0.175 + 0.065/2)],
-                                    [0.4987 + 0.0254 + 0.0648/2, 0.4555 + 0.0648/2],
-                                    [0.309 + 0.065/2, 0.219 + 0.065/2],
-                                    [0.359 + 0.065/2, self.table_width - (0.189 + 0.065/2)],
-                                    [0.1325 + 0.0254 + 0.0655/2, 0.473 + 0.0655/2]]) #15
+        self.z_params = np.load("z_params.npy")
         
-        self.z_params = np.zeros(shape=(6,), dtype=np.float32)
-        self.z_params[0] = -(18.61)*10**(-3)
-
-        img_shape = (2048, 1536)
-        self.z_pixel_map = np.full((img_shape[0] // 8, img_shape[1] // 8), self.z_params[0], dtype=np.float32)
-
-        self.x_offset = 376
-        
+        self.z_pixel_map = None
         self.thresh_map = None
+        
         self.img_shape = img_shape
+        self.offset = offset
         
     def set_thresh_map(self, cutoff):
-        self.thresh_map = np.minimum(np.tile(cutoff[:,None], (1,self.img_shape[0])), 225) + 25
+        self.thresh_map = np.minimum(np.tile(cutoff[:,None], (1,self.img_shape[1])), 235) + 15
 
     def get_puck_pixel(self, frame):
         mask = cv2.compare(frame, self.thresh_map, cv2.CMP_GE)
@@ -86,48 +62,27 @@ class SetupCamera:
         contour = contours[0]
         M = cv2.moments(contour)
         if len(contour) > 30 and M['m00'] > 150:
-            img_pos = np.array([M['m10'] / M['m00'] + self.x_offset, M['m01'] / M['m00']])
+            img_pos = np.array([M['m10'] / M['m00'] + self.offset[0], M['m01'] / M['m00'] + self.offset[1]])
             return img_pos
         return None
     
     def run_extrinsics(self, frame):
-        self.aruco_3d_points = np.load("aruco_3d_points.npy")
-        self.z_params_world = np.load("z_params.npy")
-        rvec, tvec = extrinsic.calibrate_extrinsic(frame, self.aruco_3d_points, self.intrinsic_matrix, self.distortion_coeffs, self.x_offset)
+        rvec, tvec = extrinsic.calibrate_extrinsic(frame, self.aruco_3d_points, self.intrinsic_matrix, self.distortion_coeffs)
         if rvec is not None and tvec is not None:
             self.rotation_matrix = cv2.Rodrigues(rvec)[0]
             self.translation_vector = tvec
-            self.z_pixel_map = extrinsic.get_z_pixel_map(self.z_params_world, self.rotation_matrix, self.translation_vector, self.intrinsic_matrix, self.distortion_coeffs)
+            print(rvec)
+            print(tvec)
+            self.z_pixel_map = extrinsic.get_z_pixel_map(self.z_params, self.rotation_matrix, self.translation_vector, self.intrinsic_matrix, self.distortion_coeffs)
             print('Extrinsic calibration successful')
             return True
 
         else:
             print('Extrinsic calibration failed, waiting for next time')
             return False
-
-    def measure_extrinsics(self, imgs, puck_pxls_wall_x, puck_pxls_wall_y, puck_pxls_location):
-        aruco_3d_points_min, z_params = extrinsic.solve_external_and_zparam(imgs,\
-                                                        self.aruco_3d_points,\
-                                                        puck_pxls_wall_x,\
-                                                        puck_pxls_wall_y,\
-                                                        puck_pxls_location,\
-                                                        self.intrinsic_matrix,\
-                                                        self.distortion_coeffs,\
-                                                        self.puck_r,\
-                                                        self.puck_z,\
-                                                        self.table_height,\
-                                                        self.table_width,\
-                                                        self.puck_coords)
-        if aruco_3d_points_min is None:
-            return False
-        self.aruco_3d_points = aruco_3d_points_min
-        self.z_params = z_params
-        np.save("aruco_3d_points.npy", self.aruco_3d_points)
-        np.save("z_params.npy", z_params)
-        return True
     
     def see_aruco_pixels(self, img):
-        top_right_corners = extrinsic.detect_aruco_markers(img, self.x_offset)
+        top_right_corners = extrinsic.detect_aruco_markers(img, self.offset)
 
         if len(top_right_corners) != 6:
             return False
@@ -135,7 +90,7 @@ class SetupCamera:
         return True
 
 class CameraTracker:
-    def __init__(self, rotation_matrix, translation_vector, z_pixel_map, op_mallet_z, cutoff):
+    def __init__(self, rotation_matrix, translation_vector, z_pixel_map, thresh_map, img_shape, offset):
         self.intrinsic_matrix = np.array([[1.63911836e+03, 0.0, 1.01832305e+03],
                                 [0.0, 1.63894064e+03, 7.72656464e+02],
                                 [0.0, 0.0, 1.0]])
@@ -145,35 +100,35 @@ class CameraTracker:
         self.translation_vector = translation_vector
         self.z_pixel_map = z_pixel_map
 
-        self.puck_z = 3.75 * 10**(-3) #3.6* 10**(-3)
-        self.puck_r = 0.5 * 0.0636 #0.5 * 0.0629
+        self.puck_z = (6.75-0.9)*10**(-3)
+        self.puck_r = 0.5 * 0.0636
+        self.bounds = [2.362, 1.144]
 
-        self.op_mallet_z = op_mallet_z
-        self.op_mallet_r = 0.5 * 0.0997 # Guess here, measure later
+        self.op_mallet_z = 0.0716
+        self.op_mallet_r = 0.5 * 0.0596
+        
+        self.puck_r_vis = 0.5*0.0826
+        self.op_mallet_r_vis = 0.5*0.0997
 
         self.past_puck_pos = np.array([1.7, 0.5])
         self.past_op_mallet_pos = np.array([0.3, 0.5])
         self.past_past_puck_pos = np.array([1.7, 0.5])
 
         self.past_data = CircularCameraBuffer()
-        self.x_offset = 376
+        self.offset = offset
+        self.img_shape = img_shape
         
-        self.bounds = [1.993, 0.992] 
-        self.thresh_map = np.minimum(np.tile(cutoff[:,None], (1,1296)), 225) + 25
+        self.thresh_map = thresh_map
         
-        self.mask = np.empty((1536,1296), dtype=np.uint8)
+        self.mask = np.empty(img_shape, dtype=np.uint8)
 
     def track(self, frame):
-        
-        #cv2.inRange(frame, 230, 255, dst=self.mask)
         cv2.compare(frame, self.thresh_map, cv2.CMP_GE, dst=self.mask)
-        #cv2.imshow("mask", self.mask[::2, ::2])
-        #cv2.waitKey(1)
+        
+        self.mask[1105, 1259] = int((frame[1104, 1259] + frame[1106, 1259] + frame[1105, 1258] + frame[1105, 1260] + frame[1104, 1258] + frame[1104, 1260] + frame[1106, 1258] + frame[1106, 1260])/8.0) > self.thresh_map[1105, 1259]
 
         contours, _ = cv2.findContours(self.mask, cv2.RETR_TREE, cv2.CHAIN_APPROX_NONE)
 
-        #contours_copy = [cnt.copy() for cnt in contours]
-        
         contours = [
             cnt for cnt in contours
             if len(cnt) >= 35
@@ -195,12 +150,13 @@ class CameraTracker:
         joins = 0
         
         for contour in contours:
-            contour[:,0,0] += self.x_offset
+            contour[:,0,0] += self.offset[1]
+            contour[:,0,1] += self.offset[0]
             M = cv2.moments(contour)
             img_pos = np.array([M['m10'] / M['m00'], M['m01'] / M['m00']])
             img_pos_int = tuple(map(int, img_pos))
 
-            if self.mask[img_pos_int[1], img_pos_int[0] - self.x_offset] == 0 and mallet_pos is None:
+            if self.mask[img_pos_int[1] - self.offset[0], img_pos_int[0] - self.offset[1]] == 0 and mallet_pos is None:
                 mallet_pos = extrinsic.global_coordinate_zpixel(img_pos,
                         self.rotation_matrix,
                         self.translation_vector,
@@ -208,7 +164,7 @@ class CameraTracker:
                         self.distortion_coeffs,
                         self.op_mallet_z,
                         self.z_pixel_map)[0:2]
-            elif self.mask[img_pos_int[1], img_pos_int[0] - self.x_offset] != 0:
+            elif self.mask[img_pos_int[1] - self.offset[0], img_pos_int[0] - self.offset[1]] != 0:
                 #if puck_center is not None:
                 #    print(np.linalg.norm(puck_center - img_pos))
                 if ((puck_center is None) or (np.linalg.norm(puck_center - img_pos) < 50)):
@@ -230,6 +186,8 @@ class CameraTracker:
                     
         if puck_contour is not None:
             puck_contour = np.vstack((puck_contour, puck_center))
+            print("A")
+            print(puck_center)
             points_3D = extrinsic.global_coordinate_vectorized_zpixel(puck_contour,\
                         self.rotation_matrix,\
                         self.translation_vector,\
@@ -237,6 +195,7 @@ class CameraTracker:
                         self.distortion_coeffs,\
                         self.puck_z,
                         self.z_pixel_map)[:,:2]
+            print(points_3D[-1,:])
             puck_pos = self.fit_circle(points_3D[:-1], points_3D[-1:].squeeze(), joins)
             if (puck_pos == points_3D[-1:].squeeze()).all():
                 obstructed = False
@@ -359,11 +318,11 @@ class CameraTracker:
         self.past_past_puck_pos = self.past_puck_pos
         self.past_puck_pos = puck_pos
 
-        self.past_data.put(np.concatenate([self.bounds - puck_pos, self.bounds - opponent_mallet_pos], axis=0))
+        self.past_data.put(np.concatenate([puck_pos, opponent_mallet_pos], axis=0))
         
         if printing:
             print("---")
-            print(np.array(self.bounds) - puck_pos)
+            print(puck_pos)
             print(opponent_mallet_pos)
         
         if top_down_view:
@@ -375,13 +334,13 @@ class CameraTracker:
 
         top_down_image = np.ones((int(self.bounds[1] * 500), int(self.bounds[0] * 500), 3), dtype=np.uint8) * 255
         # Convert world coordinates to image coordinates.
-        x_img = int((self.bounds[0] - puck_pos[0]) * 500)  # scale factor for x
-        y_img = int(puck_pos[1] * 500)  # invert y-axis for display
-        cv2.circle(top_down_image, (x_img, y_img), int(self.puck_r * 500), (0, 255, 0), -1)
+        x_img = int((puck_pos[0]) * 500)  # scale factor for x
+        y_img = int((self.bounds[1] - puck_pos[1]) * 500)  # invert y-axis for display
+        cv2.circle(top_down_image, (x_img, y_img), int(self.puck_r_vis * 500), (0, 255, 0), -1)
 
-        x_img = int((self.bounds[0] - op_mallet_pos[0]) * 500)  # scale factor for x
-        y_img = int(op_mallet_pos[1] * 500)  # invert y-axis for display
-        cv2.circle(top_down_image, (x_img, y_img), int(self.op_mallet_r * 500), (255, 255, 0), -1)
+        x_img = int((op_mallet_pos[0]) * 500)  # scale factor for x
+        y_img = int((self.bounds[1] - op_mallet_pos[1]) * 500)  # invert y-axis for display
+        cv2.circle(top_down_image, (x_img, y_img), int(self.op_mallet_r_vis * 500), (255, 255, 0), -1)
 
         cv2.imshow("top_down_table", top_down_image)
         cv2.waitKey(1)

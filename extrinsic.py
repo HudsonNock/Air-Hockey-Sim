@@ -4,7 +4,7 @@ import matplotlib.pyplot as plt
 from scipy.optimize import minimize
 from scipy.optimize import least_squares
 
-def detect_aruco_markers(gray, x_offset):
+def detect_aruco_markers(gray):
     # Load the image
     
     # Load the predefined ArUco dictionary
@@ -22,7 +22,6 @@ def detect_aruco_markers(gray, x_offset):
         top_right_corners = {}
         for i, marker_id in enumerate(ids.flatten()):
             # Extract top-right corner (third corner in OpenCV ArUco order)
-            corners[i][0][1][0] += x_offset
             top_right = tuple(corners[i][0][1].astype(int))
             top_right_corners[marker_id] = top_right
         
@@ -248,8 +247,8 @@ def z_height_vectorized(z_param, p):
             z_param[6] * p[:,0]**3 + z_param[7] * p[:,0]**2 * p[:,1] + z_param[8] * p[:,0] * p[:,1]**2 +\
             z_param[9] * p[:,1]**3
 
-def calibrate_extrinsic(img: np.ndarray, aruco_3d_points, intrinsic_matrix, dist_coeffs, x_offset):
-    top_right_corners = detect_aruco_markers(img, x_offset)
+def calibrate_extrinsic(img: np.ndarray, aruco_3d_points, intrinsic_matrix, dist_coeffs):
+    top_right_corners = detect_aruco_markers(img)
 
     if len(top_right_corners) != 6:
         return None, None
@@ -262,8 +261,8 @@ def calibrate_extrinsic(img: np.ndarray, aruco_3d_points, intrinsic_matrix, dist
                                        dist_coeffs,
                                        flags=cv2.SOLVEPNP_ITERATIVE,
                                        useExtrinsicGuess=True,
-                                       tvec=np.array([-0.54740303, -1.08125622, 2.45483598]),
-                                       rvec=np.array([-2.4881045, -2.43093864, 0.81342852]))
+                                       tvec=np.array([0.6625046, 0.49915446, 1.57550678]),
+                                       rvec=np.array([1.78223472, -1.92633484, 0.61343312]))
     return rvec, tvec
 
 def global_coordainte_vectorized_zworld_error(points, delta_z, z_params_world, rot_mat, tvec, intrinsic_matrix, dist_coeffs, pxls):

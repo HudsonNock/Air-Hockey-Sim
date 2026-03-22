@@ -444,7 +444,7 @@ def system_loop(cam, load):
     time.sleep(3)
     print("Start")
     
-    puck_data = np.zeros((5000, 5))
+    puck_data = np.zeros((10000, 5))
     
     for _ in range(20):
         image = cam.GetNextImage()
@@ -478,7 +478,7 @@ def system_loop(cam, load):
         
         idx += 1
         if idx == len(puck_data):
-            with open("new_data/puck_data_noise_beam.csv", "w", newline="") as f:
+            with open("new_data/puck_data_noise.csv", "w", newline="") as f:
                 writer = csv.writer(f)
                 # Write header
                 writer.writerow(["x", "y", "dt", "obstructed", "visable"])
@@ -488,6 +488,8 @@ def system_loop(cam, load):
                     writer.writerow([puck_data[i, 0], puck_data[i, 1], puck_data[i, 2], puck_data[i, 3], puck_data[i, 4]])
             print("SIGNAL END")
             break
+       	if idx % 1000 == 0:
+       	    print(idx)
     
     cam.EndAcquisition()
 

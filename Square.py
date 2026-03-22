@@ -60,7 +60,7 @@ class CircularMalletBuffer:
         """
         return np.vstack((self.buffer[self.index:], self.buffer[:self.index]))
 
-mallet_buffer = CircularMalletBuffer(11)
+mallet_buffer = CircularMalletBuffer(num_points)
 stored_buffer = bytearray()
 
 def set_realtime_priority():

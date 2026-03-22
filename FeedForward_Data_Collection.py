@@ -16,22 +16,23 @@ import struct
 import tensordict
 from tensordict import TensorDict
 import torch
-import agent_processing as ap
+import agent_processing_no_NN as ap
 import argparse
 import csv
 
 torch.set_num_threads(2)
 torch.set_num_interop_threads(1)
 
-table_bounds = np.array([1.993, 0.992])
+table_bounds = np.array([2.362, 1.144])
 
-margin = 0.03
-margin_bottom = 0.03
+margin = 0.05
+margin_bottom = 0.05
 
 mallet_r = 0.1011 / 2
 puck_r = 0.0629 / 2
 
 Vmax = 24 * 0.8
+
 def set_realtime_priority():
     os.sched_setaffinity(0, {2,3})
     SCHED_FIFO = 1
@@ -82,44 +83,38 @@ def deq(q, xmin, xmax):
     y = q/32767.0
     return (y+1)/2 * (xmax - xmin) + xmin
     
-def get_mallet(ser):    
-    FMT = '<hhhhhhhB'    # 6×int16, 1×uint8
+def get_mallet(ser):   
+
+    FMT = '<hhhhhhhB'    # 5×int16, 1×uint8
     FRAME_SIZE = struct.calcsize(FMT)
-    
-    # Read entire buffer
-    #while ser.in_waiting < 33:
-    #    pass
-    search_buffer = ser.read(ser.in_waiting)
-    
-    # Start from the last 29 bytes
-    
+
+    buffer = bytearray()
+    buffer.extend(ser.read(ser.in_waiting))
+    print(buffer)
+            
     # Find the start marker (0xAA)
-    start_idx = -1
-    for i in range(len(search_buffer)-3):
-        if search_buffer[i] == 0xFF and search_buffer[i+1] == 0xFF and search_buffer[i+2] == 0xFF:
-            start_idx = i+2
-            break
-    
-    if start_idx == -1:
-        print("No start marker found")
-        return None, None, None, False
+    start_idx = 0
+    if buffer[0] != 0xFF or buffer[1] != 0xFF or buffer[2] != 0xFF:
+        print("ERROR")
+        print(buffer)
+        print(1/0)
     
     # Check if we have enough bytes for a complete frame after the start marker
-    remaining_bytes = len(search_buffer) - start_idx - 1  # -1 for the start marker itself
+    remaining_bytes = len(buffer) - start_idx - 1  # -1 for the start marker itself
     if remaining_bytes < FRAME_SIZE + 1:  # +1 for end marker
-        print("Not enough bytes for complete frame")
-        return None, None, None, False
+        print(1/0)
     
     # Extract the frame data
-    frame_start = start_idx + 1
+    frame_start = 3
     frame_end = frame_start + FRAME_SIZE
-    raw = search_buffer[frame_start:frame_end]
+    raw = buffer[frame_start:frame_end]
     
-    # Check end marker
-    if frame_end >= len(search_buffer) or search_buffer[frame_end] != 0x55:
+    if frame_end >= len(buffer) or buffer[frame_end] != 0x55:
         print("Invalid end marker")
-        return None, None, None, False
+        print(1/0)
     
+    buffer = buffer[frame_end+1:]
+
     # Unpack the data
     p0, p1, ep0, ep1, pwm0, pwm1, dt, chk = struct.unpack(FMT, raw)
 
@@ -128,20 +123,52 @@ def get_mallet(ser):
     for b in raw[:-1]:
         c ^= b
     if c != chk:
-        print("bad checksum", c, chk)
-        return None, None, None, False
-    
+        print("bad checksum")
+        print(1/0)
+
     pos = np.array([deq(p0, -0.5, 2), deq(p1, -0.5, 2)])
-    vel = np.array([0,0])
-    acc = np.array([0,0])
     
-    return pos, vel, acc, True
+    return pos
+        
+def get_init_conditions(pred=0):
+    global mallet_buffer
+    mallet_data = mallet_buffer.read()
+    ts = np.cumsum(mallet_data[:,2])
+    coef_x = np.polyfit(ts, mallet_data[:,0], 2)
+    coef_y = np.polyfit(ts, mallet_data[:,1], 2)
+    
+    t = ts[-1] + pred
+    
+    pos = np.array([coef_x[0]*t**2 + coef_x[1]*t + coef_x[2], \
+                    coef_y[0]*t**2 + coef_y[1]*t + coef_y[2]])
+                    
+    vel = np.array([2*coef_x[0]*t + coef_x[1], \
+                    2*coef_y[0]*t + coef_y[1]])
+                    
+    acc = np.array([2*coef_x[0], \
+                    2*coef_y[0]])
+                    
+    return pos, vel, acc
 
 def collect_data():
     """Optimized timing measurement with minimal overhead"""
     
     # Disable garbage collection during measurement
     #try:
+    
+    action_commands = []#np.load('data/actions_newp.npy')
+    for idx in range(6):
+        if idx%4 == 0:
+            xf = np.array([0.85, 0.3])
+        elif idx%4 == 1:
+            xf = np.array([0.85, 0.85])
+        elif idx%4 == 2:
+            xf = np.array([0.3, 0.85])
+        elif idx%4 == 3:
+            xf = np.array([0.3, 0.3])
+        action_commands.append(np.concatenate((xf, np.array([3.0,3.0]), np.array([1.0])), axis=0))
+    action_commands = np.array(action_commands)
+
     
     PORT = '/dev/ttyUSB0'  # Adjust this to COM port or /dev/ttyUSBx
     BAUD = 460800
@@ -197,15 +224,13 @@ def collect_data():
     input("Enter to Start")
     gc.collect()
     
-    time.sleep(0.5)
-    passed = False
-    while not passed:
-        pos, vel, acc, passed = get_mallet(ser)
+    time.sleep(1.0)
+    pos = get_mallet(ser)
             
-    xf = np.array([0.7, 0.5])
-    Vo = np.array([15, 13])
+    xf = np.array([table_bounds[0]/4, table_bounds[1]/2])
+    Vo = np.array([3, 3])
     
-    data = ap.update_path(pos, vel, acc, xf, Vo)
+    data = ap.update_path(pos, np.zeros((2,)), np.zeros((2,)), xf, Vo)
     ser.write(b'\n' + data + b'\n')
     
     buffer = bytearray()
@@ -213,7 +238,7 @@ def collect_data():
     FMT = '<hhhhhhhB'    # 5×int16, 1×uint8
     FRAME_SIZE = struct.calcsize(FMT)
     
-    sample_len = 10000
+    sample_len = 70000
     pos = np.zeros((sample_len,2))
     exp_pos = np.zeros((sample_len,2))
     pwms = np.zeros((sample_len,2))
@@ -222,41 +247,40 @@ def collect_data():
     signal_end = False
     
     t1 = time.perf_counter()
-    counter = 0
     pos[0,:] = pully_R
     idx = 1
     
-    delay = 0.02 #np.random.random() * 0.1 + 0.02 #0.3 + 0.2
-    
+    #delay = 0.02 #np.random.random() * 0.1 + 0.02 #0.3 + 0.2
+    action_idx = 0
+    ser.reset_input_buffer()
     while True:
         # Read entire buffer
         
-        if time.perf_counter() - t1 > delay:
-            delay = 0.02 #np.random.random() * 0.1 + 0.02 #0.3 + 0.2
-            if idx > 21:
-                #counter += 1
-                xf = np.array([np.random.random() * (0.4) + 0.3, np.random.random() * 0.4 + 0.3])
-                Vo = np.array([np.random.random() * (24*0.8-10) + 10, np.random.random() * (24*0.8-10) + 10])
-                #Vo = np.array([3.5, 3.5])
-                
-                ts = np.cumsum(dts[idx-21:idx]) / 1000.0
-                coef_x = np.polyfit(ts, pos[idx-21:idx,0], 2)
-                coef_y = np.polyfit(ts, pos[idx-21:idx,1], 2)
-                
-                t = ts[-1] + 4.0768/1000
-                
-                pred_pos = np.array([coef_x[0]*t**2 + coef_x[1]*t + coef_x[2], \
-                                coef_y[0]*t**2 + coef_y[1]*t + coef_y[2]])
-                                
-                pred_vel = np.array([2*coef_x[0]*t + coef_x[1], \
-                                2*coef_y[0]*t + coef_y[1]])
-                                
-                pred_acc = np.array([2*coef_x[0], \
-                                2*coef_y[0]])
+        if time.perf_counter() - t1 > action_commands[action_idx, 4]:
+            time_passed = time.perf_counter() - t1
+            t1 = time.perf_counter()
+            
+            #xf = np.array([np.random.random() * (0.4) + 0.3, np.random.random() * 0.4 + 0.3])
+            #Vo = np.array([np.random.random() * (24*0.8-10) + 10, np.random.random() * (24*0.8-10) + 10])
+            xf = action_commands[action_idx, :2]
+            xf[0] = max(xf[0], 0.3+(action_idx%2)*0.01)
+            xf[0] = min(xf[0], 0.7+(action_idx%2)*0.01)
+            xf[1] = max(xf[1], 0.3+(action_idx%2)*0.01)
+            xf[1] = min(xf[1], 0.7+(action_idx%2)*0.01)
+            
+            Vo = action_commands[action_idx, 2:4]
+            action_idx += 1
+            if action_idx == len(action_commands):
+                print("END OF ACTIONS")
+                signal_end = True
+            #Vo = np.array([12,12])
+            #delay = 0.02 #np.random.random() * 0.1 + 0.02 #0.3 + 0.2
+            
+            pos_ic, vel_ic, acc_ic = ap.get_IC(time_passed)
 
-                data = ap.update_path(pred_pos, pred_vel, pred_acc, xf, Vo)
-                ser.write(b'\n' + data + b'\n')
-                t1 = time.perf_counter()
+            data = ap.update_path(pos_ic, vel_ic, acc_ic, xf, Vo)
+            ser.write(b'\n' + data + b'\n')
+            
         
            
         if ser.in_waiting > 1000:
@@ -266,7 +290,7 @@ def collect_data():
             pass
         buffer.extend(ser.read(ser.in_waiting))
             
-        while len(buffer) > 60:
+        while len(buffer) > 60 and not signal_end:
             # Find the start marker (0xAA)
             start_idx = 0
             if buffer[0] != 0xFF or buffer[1] != 0xFF or buffer[2] != 0xFF:
@@ -284,12 +308,13 @@ def collect_data():
             frame_start = 3
             frame_end = frame_start + FRAME_SIZE
             raw = buffer[frame_start:frame_end]
-            buffer = buffer[frame_end+1:]
-
-            # Check end marker
+            
             if frame_end >= len(buffer) or buffer[frame_end] != 0x55:
                 print("Invalid end marker")
+                print(1/0)
                 break
+    
+            buffer = buffer[frame_end+1:]
 
             # Unpack the data
             p0, p1, ep0, ep1, pwm0, pwm1, dt, chk = struct.unpack(FMT, raw)
@@ -327,10 +352,10 @@ def collect_data():
             #print(pwms)
             #print("------")
             #print(dts)
-            with open("feedforward_feedback_data_delayed.csv", "w", newline="") as f:
+            with open("new_data/mallet_data_square.csv", "w", newline="") as f:
                 writer = csv.writer(f)
                 # Write header
-                writer.writerow(["x", "y", "Expected_x", "Expected_y", "pwm_x", "pwm_y", "dt"])
+                writer.writerow(["x", "y", "Expected_x", "Expected_y", "Left_PWM", "Right_PWM", "dt"])
                 
                 # Write rows
                 for p, ep, pwm, dt in zip(pos, exp_pos, pwms, dts):

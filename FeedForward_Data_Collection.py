@@ -170,9 +170,9 @@ def collect_data():
         action_commands.append(np.concatenate((xf, np.array([5.0,5.0]), np.array([1.0])), axis=0))
     action_commands = np.array(action_commands)
     """
-    for idx in range(20):
+    for idx in range(50):
         xf = np.array([0.3+np.random.random()*(0.85-0.3), 0.3+np.random.random()*(0.85-0.3)])
-        action_commands.append(np.concatenate((xf, np.array([5.0,5.0]), np.array([0.2])), axis=0))
+        action_commands.append(np.concatenate((xf, np.array([8.0,8.0]), np.array([0.2])), axis=0))
     action_commands = np.array(action_commands)
 
     

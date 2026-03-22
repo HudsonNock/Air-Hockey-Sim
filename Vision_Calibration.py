@@ -390,7 +390,9 @@ def begin_calibrations(cam):
     
     time.sleep(1)
     img_shape = (1536, 2048)
+    offset = (0,0)
     
+    set_roi(cam, img_shape[1], img_shape[0], offset[0], offset[1])
     set_pixel_format(cam, mode="Mono8")
     configure_camera(cam, gain_val=4.0, exposure_val=8000.0, balance_ratio_val=2.5)
     set_frame_rate(cam, target_fps=10.0)
@@ -411,7 +413,7 @@ def begin_calibrations(cam):
     #    img = image.GetData().reshape(img_shape)
     #    image.Release()
     
-    setup = tracker.SetupCamera()
+    setup = tracker.SetupCamera(img_shape = img_shape, offset=offset)
 
     while not setup.see_aruco_pixels(img):
         cv2.imshow("arucos", img[::2, ::2])
@@ -442,14 +444,9 @@ def begin_calibrations(cam):
     img = image.GetData().reshape(img_shape)
     image.Release()
     
-    y_max = np.max(img[:, int(img.shape[1]/2-30):int(img.shape[1]/2+30)], axis=1)
+    y_max = np.max(img, axis=1)
+    y_max[1279] = np.max(np.concatenate([img[:1501, 1279], np.array([0]), img[1502:, 1279]]))
     cutoff = np.array([np.max(y_max[max(0,i-30):min(i+30, len(y_max))]) for i in range(len(y_max))])
-    
-    #cutoff_thres = np.minimum(np.tile(cutoff[:,None], (1,1296)), 225) + 25
-    #cv2.imshow("thresh", cutoff_thres[::2, ::2])
-    #cv2.imshow("img", img[::2, ::2])
-    #cv2.waitKey(0)
-    
     
     for _ in range(10):
         image = cam.GetNextImage()
@@ -463,19 +460,28 @@ def begin_calibrations(cam):
         img = image.GetData().reshape(img_shape)
         image.Release()
         
-        y_max = np.max(img[:, int(img.shape[1]/2-30):int(img.shape[1]/2+30)], axis=1)
+        #if (img > 200).any():
+        #	cv2.imshow("img", img[1200:1400,1500:])
+        	#1201, 1579
+        #if (img > 200).any():
+        #    print("--")
+        #    print(np.argmax(img))
+        #    print(np.argmax(np.max(img, axis=0)))
+        #    print(np.argmax(np.max(img,axis=1)))
+        #    print(img[np.argmax(np.max(img,axis=1)), np.argmax(np.max(img, axis=0))])
+        #1501, 1279
+        y_max = np.max(img, axis=1)
+        y_max[1279] = np.max(np.concatenate([img[:1501, 1279], np.array([0]), img[1502:, 1279]]))
         cutoff2 = np.array([np.max(y_max[max(0,i-30):min(i+30, len(y_max))]) for i in range(len(y_max))])
-        
+
         cutoff = np.maximum(cutoff, cutoff2)
     
-    cutoff_thres = np.minimum(np.tile(cutoff[:,None], (1,1296)), 235) + 15
-    cv2.imshow("thresh", cutoff_thres[::2, ::2])
+    setup.set_thresh_map(cutoff)
+    cv2.imshow("thresh", setup.thresh_map[::2, ::2])
     cv2.waitKey(0)
     
     del y_max
     del cutoff2
-    
-    setup.set_thresh_map(cutoff)
     
     ser.write(b'\n')
     while ser.in_waiting == 0:
@@ -694,7 +700,7 @@ def begin_calibrations(cam):
                     pos, vel, acc = get_init_conditions()
                     #print("B2")
                     pxls[idx] = pxl
-                    location = np.array([table_bounds[0] - (pos[0] + target_puck[0]-mp[0]), table_bounds[1] - target_puck[1]])
+                    location = np.array([pos[0] + target_puck[0]-mp[0], target_puck[1]])
                     locations[idx] = location
                     
                     np.save(f"new_data/pxls_data_{j}.npy", np.array(pxls))  

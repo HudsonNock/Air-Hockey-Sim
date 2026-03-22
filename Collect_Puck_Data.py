@@ -16,60 +16,14 @@ import struct
 import tensordict
 from tensordict import TensorDict
 import torch
-import agent_processing as ap
+import agent_processing_camera_delay as ap
 import argparse
 import csv
 
 torch.set_num_threads(2)
 torch.set_num_interop_threads(1)
 
-table_bounds = np.array([1.993, 0.992])
-obs_dim = 51
-obs = np.zeros((obs_dim,), dtype=np.float32)
-obs[32:32+14] = np.array([[0.75, 0.01, 0.7, 0.7, 0.01, 0.65, 0.02, 0.8, 0.01, 0.75, 0.74, 0.01, 0.73, 0.02]])
-#obs[32+7:32+14] = np.array([0.8, 0.3, 0.6, 0.7, 0.2, 0.4, 0.03]) #mallet res
-obs[32+14:] = np.array([ap.a1/ap.pullyR * 1e4, ap.a2/ap.pullyR * 1e1, ap.a3/ap.pullyR * 1e0, ap.b1/ap.pullyR * 1e4, ap.b2/ap.pullyR * 1e1])
-obs[32+14:] *= 1.2
-#e_n0, e_nr, e_nf, e_t0, e_tr, e_tf, std
-
-margin = 0.03
-margin_bottom = 0.03
-
-mallet_r = 0.1011 / 2
-puck_r = 0.0629 / 2
-
-num_points = 11
-
-Vmax = 24 * 0.8
-
-class CircularMalletBuffer:
-    def __init__(self, length: int):
-        """
-        Initialize a circular buffer for storing 3-float entries.
-        
-        Args:
-            length (int): Maximum number of entries in the buffer.
-        """
-        self.length = length
-        self.buffer = np.zeros((length, 3))
-        self.index = 0
-
-    def add(self, entry):
-        """Add one entry (3 floats) to the buffer."""
-        self.buffer[self.index] = entry
-        self.index = (self.index + 1) % self.length
-
-    def read(self) -> np.ndarray:
-        """
-        Return all buffer contents in chronological order.
-        
-        Returns:
-            np.ndarray: Array of shape (N, 3), where N ≤ length.
-        """
-        return np.vstack((self.buffer[self.index:], self.buffer[:self.index]))
-            
-mallet_buffer = CircularMalletBuffer(11)
-stored_buffer = bytearray()
+table_bounds = np.array([2.362, 1.144])
 
 def set_realtime_priority():
     os.sched_setaffinity(0, {2,3})
@@ -159,11 +113,12 @@ def configure_buffer_handling(cam):
     else:
         print("Unable to set Buffer Handling Mode")
 
-def configure_camera(cam, gain_val=30.0, exposure_val=100.0):
+
+def configure_camera(cam, gain_val=30.0, exposure_val=100.0, gamma_val=None, black_level_val=0, balance_ratio_val=3.6):
     # Get the camera node map
     nodemap = cam.GetNodeMap()
     
-    auto_modes = ["ExposureAuto", "GainAuto", "BalanceWhiteAuto", "GammaEnable"]
+    auto_modes = ["ExposureAuto", "GainAuto", "BalanceWhiteAuto"]
     for mode in auto_modes:
         try:
             auto_node = PySpin.CEnumerationPtr(nodemap.GetNode(mode))
@@ -174,6 +129,32 @@ def configure_camera(cam, gain_val=30.0, exposure_val=100.0):
                     print(f"{mode} disabled")
         except:
             print("Unable to disable " + mode)
+            
+    if gamma_val is None:
+        try:
+            auto_node = PySpin.CEnumerationPtr(nodemap.GetNode("GammaEnable"))
+            if PySpin.IsAvailable(auto_node) and PySpin.IsWritable(auto_node):
+                off_entry = auto_node.GetEntryByName("Off")
+                if PySpin.IsAvailable(off_entry):
+                    auto_node.SetIntValue(off_entry.GetValue())
+                    print("GammaEnable disabled")
+        except:
+            print("Unable to disable GammaEnable")
+    else:
+        try:
+            auto_node = PySpin.CEnumerationPtr(nodemap.GetNode("GammaEnable"))
+            if PySpin.IsAvailable(auto_node) and PySpin.IsWritable(auto_node):
+                on_entry = auto_node.GetEntryByName("On")
+                if PySpin.IsAvailable(on_entry):
+                    auto_node.SetIntValue(on_entry.GetValue())
+                    print("GammaEnable enabled")
+                    
+                    gamma = PySpin.CFloatPtr(nodemap.GetNode("Gamma"))
+                    if PySpin.IsAvailable(gamma) and PySpin.IsWritable(gamma):
+                        gamma.SetValue(gamma_val)
+                        print(f"Set Gamma to {gamma_val}")
+        except:
+            print("Unable to set Gamma")
 
     exposure_time = PySpin.CFloatPtr(nodemap.GetNode("ExposureTime"))
     if PySpin.IsAvailable(exposure_time) and PySpin.IsWritable(exposure_time):
@@ -187,19 +168,6 @@ def configure_camera(cam, gain_val=30.0, exposure_val=100.0):
         gain.SetValue(gain_val)
     else:
         print("Unable to set Gain.")
-        
-    # Try to disable image processing features that add latency
-    #processing_features = ["GammaEnable"] #, "SharpnessEnable", "SaturationEnable", 
-                          #"HueEnable", "DefectCorrectStaticEnable"]
-    
-    #for feature in processing_features:
-    #    try:
-    #        feature_node = PySpin.CBooleanPtr(nodemap.GetNode(feature))
-    #        if PySpin.IsAvailable(feature_node) and PySpin.IsWritable(feature_node):
-    #            feature_node.SetValue(False)
-    #            print(f"{feature} disabled")
-    #    except:
-    #        print("Unable to disable " + feature)
     
     try:
         balance_ratio = PySpin.CEnumerationPtr(nodemap.GetNode("BalanceRatioSelector"))
@@ -214,8 +182,8 @@ def configure_camera(cam, gain_val=30.0, exposure_val=100.0):
     try:
         balance_ratio = PySpin.CFloatPtr(nodemap.GetNode("BalanceRatio"))
         if PySpin.IsAvailable(balance_ratio) and PySpin.IsWritable(balance_ratio):
-            balance_ratio.SetValue(3.3)
-            print("balance ratio set to 3.3")
+            balance_ratio.SetValue(balance_ratio_val)
+            print(f"balance ratio set to {balance_ratio_val}")
     except:
         print("Unable to set balance ratio")
             
@@ -226,6 +194,37 @@ def configure_camera(cam, gain_val=30.0, exposure_val=100.0):
         print(f"Set throughput limit to {max_value}")
     else:
         print("Unable to read or write throughput limit mode.")
+        
+                
+    try:
+        auto_node = PySpin.CEnumerationPtr(nodemap.GetNode("BlackLevelSelector"))
+        if PySpin.IsAvailable(auto_node) and PySpin.IsWritable(auto_node):
+            all_entry = auto_node.GetEntryByName("All")
+            if PySpin.IsAvailable(all_entry):
+                auto_node.SetIntValue(all_entry.GetValue())
+                print("Black Level set to all")
+    except:
+        print("Unable to set black level to all")
+
+    # 1. Turn off Auto Black Level first (otherwise BlackLevel is often read-only)
+    auto_mode_node = PySpin.CEnumerationPtr(nodemap.GetNode("BlackLevelAuto"))
+    if PySpin.IsAvailable(auto_mode_node) and PySpin.IsWritable(auto_mode_node):
+        off_entry = auto_mode_node.GetEntryByName("Off")
+        if PySpin.IsAvailable(off_entry) and PySpin.IsReadable(off_entry):
+            auto_mode_node.SetIntValue(off_entry.GetValue())
+            print("Automatic Black Level turned Off.")
+
+    # 2. Access the BlackLevel value node
+    # Note: Usually this is a Float, not an Enumeration
+    black_level_node = PySpin.CFloatPtr(nodemap.GetNode("BlackLevel"))
+
+    if PySpin.IsAvailable(black_level_node) and PySpin.IsWritable(black_level_node):
+        # Ensure the value is within the camera's allowed range
+        val_to_set = max(black_level_node.GetMin(), min(black_level_node.GetMax(), black_level_val))
+        black_level_node.SetValue(val_to_set)
+        print(f"Set Black level to {val_to_set}")
+    else:
+        print("BlackLevel node is still not writable. Check 'BlackLevelSelector'.")
 
 
 def set_pixel_format(cam, mode="BayerRG8"):
@@ -293,207 +292,159 @@ def set_roi(cam, width, height, offset_x=0, offset_y=0):
     nodemap = cam.GetNodeMap()
     
     # Set width
-    width_node = PySpin.CIntegerPtr(nodemap.GetNode("Width"))
-    if PySpin.IsAvailable(width_node) and PySpin.IsWritable(width_node):
-        width_node.SetValue(width)
-    
-    # Set height  
-    height_node = PySpin.CIntegerPtr(nodemap.GetNode("Height"))
-    if PySpin.IsAvailable(height_node) and PySpin.IsWritable(height_node):
-        height_node.SetValue(height)
+    try:
+        width_node = PySpin.CIntegerPtr(nodemap.GetNode("Width"))
+        if PySpin.IsAvailable(width_node) and PySpin.IsWritable(width_node):
+            width_node.SetValue(width)
         
-    # Set offsets
-    offset_x_node = PySpin.CIntegerPtr(nodemap.GetNode("OffsetX"))
-    if PySpin.IsAvailable(offset_x_node) and PySpin.IsWritable(offset_x_node):
-        offset_x_node.SetValue(offset_x)
-        
-    offset_y_node = PySpin.CIntegerPtr(nodemap.GetNode("OffsetY"))
-    if PySpin.IsAvailable(offset_y_node) and PySpin.IsWritable(offset_y_node):
-        offset_y_node.SetValue(offset_y)
-        
-def deq(q, xmin, xmax):
-    y = q/32767
-    return (y+1)/2 * (xmax - xmin) + xmin
-        
-
-def get_mallet(ser):   
-    global stored_buffer
-    global mallet_buffer 
-    FMT = '<hhhB'    # 3×int16, 1×uint8
-    FRAME_SIZE = struct.calcsize(FMT) #11
-    
-    # Read entire buffer
-    while ser.in_waiting < 11*2-1:
-        pass
-
-    buffer = ser.read(ser.in_waiting)
-    
-    if len(buffer) > (num_points+1) * 11 - 1:
-        stored_buffer = bytearray(buffer[-((num_points+1)*11-1):])
-    else:
-        stored_buffer.extend(buffer)
-    
-    while len(stored_buffer) >= 11:
-        # Find the start marker (0xAA)
-        start_idx = -1
-        for i in range(len(stored_buffer)-3):
-            if stored_buffer[i] == 0xFF and stored_buffer[i+1] == 0xFF and stored_buffer[i+2] == 0xFF:
-                start_idx = i+2
-                break
-        
-        if start_idx == -1:
-            break
-        
-        # Check if we have enough bytes for a complete frame after the start marker
-        remaining_bytes = len(stored_buffer) - start_idx - 1  # -1 for the start marker itself
-        if remaining_bytes < FRAME_SIZE + 1:  # +1 for end marker
-            break
-        
-        # Extract the frame data
-        frame_start = start_idx + 1
-        frame_end = frame_start + FRAME_SIZE
-        raw = stored_buffer[frame_start:frame_end]
-        
-        # Check end marker
-        if stored_buffer[frame_end] != 0x55:
-            print("frame end err")
-            print(stored_buffer)
-            print(1/0)
-            break
-        
-        # Unpack the data
-        p0, p1, dt1, chk = struct.unpack(FMT, raw)
-
-        # Verify checksum
-        c = 0
-        for b in raw[:-1]:
-            c ^= b
-        if c != chk:
-            print("bad checksum", c, chk)
-            print(stored_buffer)
-            print(1/0)
-        else:
-            entry = np.array([deq(p0, -1, 2), deq(p1, -1, 2), deq(dt1, 0, 3) / 1000.0])
-            mallet_buffer.add(entry)
-        
-        if frame_end+1 < len(stored_buffer):
-            del stored_buffer[:frame_end+1]
-        else:
-            break
+        # Set height  
+        height_node = PySpin.CIntegerPtr(nodemap.GetNode("Height"))
+        if PySpin.IsAvailable(height_node) and PySpin.IsWritable(height_node):
+            height_node.SetValue(height)
             
-def get_init_conditions(pred=0):
-    global mallet_buffer
-    mallet_data = mallet_buffer.read()
-    ts = np.cumsum(mallet_data[:,2])
-    coef_x = np.polyfit(ts, mallet_data[:,0], 2)
-    coef_y = np.polyfit(ts, mallet_data[:,1], 2)
-    
-    t = ts[-1] + pred
-    
-    pos = np.array([coef_x[0]*t**2 + coef_x[1]*t + coef_x[2], \
-                    coef_y[0]*t**2 + coef_y[1]*t + coef_y[2]])
-                    
-    vel = np.array([2*coef_x[0]*t + coef_x[1], \
-                    2*coef_y[0]*t + coef_y[1]])
-                    
-    acc = np.array([2*coef_x[0], \
-                    2*coef_y[0]])
-                    
-    return pos, vel, acc
+        offset_x_node = PySpin.CIntegerPtr(nodemap.GetNode("OffsetX"))
+        if PySpin.IsAvailable(offset_x_node) and PySpin.IsWritable(offset_x_node):
+            offset_x_node.SetValue(offset_x)
+            
+        offset_y_node = PySpin.CIntegerPtr(nodemap.GetNode("OffsetY"))
+        if PySpin.IsAvailable(offset_y_node) and PySpin.IsWritable(offset_y_node):
+            offset_y_node.SetValue(offset_y)
+    except Exception as e:
+        offset_x_node = PySpin.CIntegerPtr(nodemap.GetNode("OffsetX"))
+        if PySpin.IsAvailable(offset_x_node) and PySpin.IsWritable(offset_x_node):
+            offset_x_node.SetValue(offset_x)
+            
+        offset_y_node = PySpin.CIntegerPtr(nodemap.GetNode("OffsetY"))
+        if PySpin.IsAvailable(offset_y_node) and PySpin.IsWritable(offset_y_node):
+            offset_y_node.SetValue(offset_y)
+            
+        width_node = PySpin.CIntegerPtr(nodemap.GetNode("Width"))
+        if PySpin.IsAvailable(width_node) and PySpin.IsWritable(width_node):
+            width_node.SetValue(width)
+        
+        # Set height  
+        height_node = PySpin.CIntegerPtr(nodemap.GetNode("Height"))
+        if PySpin.IsAvailable(height_node) and PySpin.IsWritable(height_node):
+            height_node.SetValue(height)
     
 
-def system_loop(cam, load, pro):
+def system_loop(cam, load):
     """Optimized timing measurement with minimal overhead"""
     
-    # Disable garbage collection during measurement
-    img_shape = (1536, 1296)
-    opponent_mallet_z = 68.35*10**(-3)
-    if not pro:
-        opponent_mallet_z = 120.94*10**(-3)
-
-    # === CONNECT ===
+    img_shape = (1450, 1300)
+    offset = (20, 396)
     if not load:
-        time.sleep(1)
-        
+        max_img_shape = (1536, 2048)
+        set_roi(cam,max_img_shape[1],max_img_shape[0],0,0)
         set_pixel_format(cam, mode="Mono8")
-        configure_camera(cam, gain_val=10.0, exposure_val=6000.0)
-        set_frame_rate(cam, target_fps=20.0)
+        configure_camera(cam, gain_val=4.0, exposure_val=8000.0, balance_ratio_val=2.5)
+        set_frame_rate(cam, target_fps=10.0)
         
         cam.BeginAcquisition()
+        
+        bright_filter = -0.5 * np.arange(max_img_shape[0])[:,None] / 1536 + 1.5
 
         image = cam.GetNextImage()
-        img = image.GetData().reshape(img_shape)
+        img = np.clip(image.GetData().reshape(max_img_shape) * bright_filter, 0, 255).astype(np.uint8)
         image.Release()
         
-        setup = tracker.SetupCamera()
+        setup = tracker.SetupCamera(img_shape=img_shape, offset=offset)
         while not setup.run_extrinsics(img):
             cv2.imshow("arucos", img[::2, ::2])
             cv2.waitKey(0)
             image = cam.GetNextImage()
-            img = image.GetData().reshape(img_shape)
+            img = image.GetData().reshape(max_img_shape)
             image.Release()
-            
+        
         cv2.destroyAllWindows()
         
         cam.EndAcquisition()
         
-    set_pixel_format(cam, mode="BayerRG8")
-    configure_camera(cam, gain_val=35.0, exposure_val=100.0)
-    set_frame_rate(cam, target_fps=120.0)
-    
-    puck_data = np.zeros((5000, 5))
-    time.sleep(2.0)
-    
-    gc.collect()
-    
-    cam.BeginAcquisition()
-    track = None
-    
-    if not load:
+        set_roi(cam,img_shape[1],img_shape[0],offset[1],offset[0])                     
+        set_pixel_format(cam, mode="BayerRG8")
+        configure_camera(cam, gain_val=25.0, exposure_val=100.0, gamma_val=1.0, black_level_val=-5, balance_ratio_val=3.4)
+        set_frame_rate(cam, target_fps=120.0)
+        
+        print("Remove mallet + puck from view")
+        input()
+        
+        cam.BeginAcquisition()
+        
         image = cam.GetNextImage()
         img = image.GetData().reshape(img_shape)
         image.Release()
         
-        y_max = np.max(img[:, int(img.shape[1]/2-30):int(img.shape[1]/2+30)], axis=1)
+        #1105, 1259
+        #cv2.imshow("vision", img[::2, ::2])
+        #cv2.waitKey(0)
+        
+        y_max = np.max(img, axis=1)
+        y_max[1259] = np.max(np.concatenate([img[:1106, 1259], np.array([0]), img[1107:, 1259]]))
         cutoff = np.array([np.max(y_max[max(0,i-30):min(i+30, len(y_max))]) for i in range(len(y_max))])
         
-        input("Move mallet up or down")
+        for _ in range(10):
+            image = cam.GetNextImage()
+            img = image.GetData().reshape(img_shape)
+            image.Release()
         
-        image = cam.GetNextImage()
-        img = image.GetData().reshape(img_shape)
-        image.Release()
+        print("Move mallet up and down slowly all the way (8s)")
         
-        y_max = np.max(img[:, int(img.shape[1]/2-30):int(img.shape[1]/2+30)], axis=1)
-        cutoff = np.maximum(cutoff, np.array([np.max(y_max[max(0,i-30):min(i+30, len(y_max))]) for i in range(len(y_max))]))
+        for _ in range(120*8):
+            image = cam.GetNextImage()
+            img = image.GetData().reshape(img_shape)
+            image.Release()
+
+            y_max = np.max(img, axis=1)
+            y_max[1259] = np.max(np.concatenate([img[:1106, 1259], np.array([0]), img[1107:, 1259]]))
+            cutoff2 = np.array([np.max(y_max[max(0,i-30):min(i+30, len(y_max))]) for i in range(len(y_max))])
+            
+            cutoff = np.maximum(cutoff, cutoff2)
         
         del y_max
-    
+        del cutoff2
+        setup.set_thresh_map(cutoff)
+        
+        cv2.imshow("thresh", setup.thresh_map[::2, ::2])
+        cv2.waitKey(0)
+                
         track = tracker.CameraTracker(setup.rotation_matrix,
                                       setup.translation_vector,
                                       setup.z_pixel_map,
-                                      68.35*10**(-3),
-                                      cutoff)
-                                  
+                                      setup.thresh_map,
+                                      img_shape,
+                                      offset)
+                                      
         np.savez("setup_data.npz",
-                rotation_matrix=setup.rotation_matrix,
-                translation_vector=setup.translation_vector,
-                z_pixel_map=setup.z_pixel_map,
-                cutoff=cutoff)
-                                  
+            rotation_matrix=setup.rotation_matrix,
+            translation_vector=setup.translation_vector,
+            z_pixel_map=setup.z_pixel_map,
+            thresh_map=setup.thresh_map)
+                                      
         del setup
+        del cutoff
     else:
         setup_data = np.load("setup_data.npz")
         track = tracker.CameraTracker(setup_data["rotation_matrix"],
-                                      setup_data["translation_vector"],
-                                      setup_data["z_pixel_map"],
-                                      opponent_mallet_z,
-                                      setup_data["cutoff"])
+                                  setup_data["translation_vector"],
+                                  setup_data["z_pixel_map"],
+                                  setup_data["thresh_map"],
+                                  img_shape,
+                                  offset)
+                                  
+        set_roi(cam,img_shape[1],img_shape[0],offset[1],offset[0])                     
+        set_pixel_format(cam, mode="BayerRG8")
+        configure_camera(cam, gain_val=25.0, exposure_val=100.0, gamma_val=1.0, black_level_val=-5, balance_ratio_val=3.4)
+        set_frame_rate(cam, target_fps=120.0)
 
+        cam.BeginAcquisition()
+    
     gc.collect()
     
     print("Starting in 3s")
     time.sleep(3)
     print("Start")
+    
+    puck_data = np.zeros((5000, 5))
     
     for _ in range(20):
         image = cam.GetNextImage()
@@ -503,23 +454,31 @@ def system_loop(cam, load, pro):
     
     timer = time.perf_counter()
     idx = 0
+    past_puck_pos = np.array([0,0])
     while True:
     
         image = cam.GetNextImage()
         img = image.GetData().reshape(img_shape)
-        obstructed, visable = track.process_frame(img)
+        puck_pos, opponent_mallet_pos, obstructed = track.track(img)
         image.Release()
+        
+        visable = True
+        if puck_pos is None:
+            visable = False
+            puck_pos = past_puck_pos
             
-        obs[:20] = track.past_data.get()
-        puck_data[idx,:2] = obs[:2]
+        past_puck_pos = puck_pos
+        
+        puck_data[idx,:2] = puck_pos
         puck_dt = time.perf_counter() - timer
         puck_data[idx,2] = puck_dt
         puck_data[idx,3] = obstructed
         puck_data[idx,4] = visable
         timer = time.perf_counter()
+        
         idx += 1
         if idx == len(puck_data):
-            with open("puck_data_noise_beam.csv", "w", newline="") as f:
+            with open("new_data/puck_data_noise_beam.csv", "w", newline="") as f:
                 writer = csv.writer(f)
                 # Write header
                 writer.writerow(["x", "y", "dt", "obstructed", "visable"])
@@ -551,7 +510,6 @@ def main():
         
     parser = argparse.ArgumentParser()
     parser.add_argument("--load", type=str2bool, default=False)
-    parser.add_argument("--pro", type=str2bool, default=False)
     args = parser.parse_args()
     
     system = PySpin.System.GetInstance()
@@ -574,9 +532,13 @@ def main():
     check_isolation_status()
     
     configure_buffer_handling(cam)
-    set_roi(cam,1296,1536,376,0)
 
-    system_loop(cam, args.load, args.pro)
+    system_loop(cam, args.load)
+    
+    cam.DeInit()
+    del cam
+    cam_list.Clear()
+    system.ReleaseInstance()
 
 if __name__ == "__main__":
     main()

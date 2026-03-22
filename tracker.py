@@ -24,7 +24,7 @@ class CircularCameraBuffer():
         return self.get_arr
 
 class SetupCamera:
-    def __init__(self, img_shape=(2048,1536), offset=(0,0)):
+    def __init__(self, img_shape=(1536,2048), offset=(0,0)):
 
         self.aruco_3d_points = np.load("aruco_3d_points.npy")
         
@@ -82,7 +82,7 @@ class SetupCamera:
             return False
     
     def see_aruco_pixels(self, img):
-        top_right_corners = extrinsic.detect_aruco_markers(img, self.offset)
+        top_right_corners = extrinsic.detect_aruco_markers(img)
 
         if len(top_right_corners) != 6:
             return False
@@ -124,16 +124,8 @@ class CameraTracker:
 
     def track(self, frame):
         cv2.compare(frame, self.thresh_map, cv2.CMP_GE, dst=self.mask)
-        
-        self.mask[1105, 1259] = int((frame[1104, 1259] + frame[1106, 1259] + frame[1105, 1258] + frame[1105, 1260] + frame[1104, 1258] + frame[1104, 1260] + frame[1106, 1258] + frame[1106, 1260])/8.0) > self.thresh_map[1105, 1259]
 
         contours, _ = cv2.findContours(self.mask, cv2.RETR_TREE, cv2.CHAIN_APPROX_NONE)
-
-        contours = [
-            cnt for cnt in contours
-            if len(cnt) >= 35
-            and cv2.contourArea(cnt) >= 60
-        ]
         
         if len(contours) == 0:
             return None, None, True
@@ -153,6 +145,8 @@ class CameraTracker:
             contour[:,0,0] += self.offset[1]
             contour[:,0,1] += self.offset[0]
             M = cv2.moments(contour)
+            if M['m00'] == 0:
+                continue
             img_pos = np.array([M['m10'] / M['m00'], M['m01'] / M['m00']])
             img_pos_int = tuple(map(int, img_pos))
 
@@ -172,6 +166,7 @@ class CameraTracker:
                     if puck_center is None:
                         puck_center = img_pos
                         puck_contour = contour.squeeze(axis=1)
+                        puck_area = M['m00']
                     else:
                         puck_center = (puck_area * puck_center + M['m00'] * img_pos) / (puck_area + M['m00'])
                         puck_area += M['m00']
@@ -183,11 +178,9 @@ class CameraTracker:
         #    cv2.waitKey(0)
         
         obstructed = True
-                    
-        if puck_contour is not None:
+        #print(puck_area)
+        if (puck_contour is not None) and (puck_area > 60):
             puck_contour = np.vstack((puck_contour, puck_center))
-            print("A")
-            print(puck_center)
             points_3D = extrinsic.global_coordinate_vectorized_zpixel(puck_contour,\
                         self.rotation_matrix,\
                         self.translation_vector,\
@@ -195,10 +188,10 @@ class CameraTracker:
                         self.distortion_coeffs,\
                         self.puck_z,
                         self.z_pixel_map)[:,:2]
-            print(points_3D[-1,:])
-            puck_pos = self.fit_circle(points_3D[:-1], points_3D[-1:].squeeze(), joins)
-            if (puck_pos == points_3D[-1:].squeeze()).all():
-                obstructed = False
+            if (np.max(points_3D[:,0]) - np.min(points_3D[:,0])) > 0.01:
+                puck_pos = self.fit_circle(points_3D[:-1], points_3D[-1:].squeeze(), joins)
+                if (puck_pos == points_3D[-1:].squeeze()).all():
+                    obstructed = False
 
         return puck_pos, mallet_pos, obstructed
     
@@ -268,7 +261,7 @@ class CameraTracker:
         
         scores = self.circle_fitting_score(score_points, points)
 
-        #desmos_str = "[" + ", ".join(f"({x}, {y})" for x, y in points) + "]"
+        desmos_str = "[" + ", ".join(f"({x}, {y})" for x, y in points) + "]"
         #print("--")
         #print(desmos_str)
         #print(scores)

@@ -17,6 +17,7 @@ import tensordict
 from tensordict import TensorDict
 import torch
 import extrinsic
+import matplotlib.pyplot as plt
 
 
 table_bounds = np.array([2.362, 1.144])
@@ -31,7 +32,7 @@ mallet_bounds = np.array([[margin_bounds + mallet_r, table_bounds[0]/2  + mallet
 err = []
 
 def main():
-    for j in range(1,4):
+    for j in range(4,5):
         img_shape = (1536, 2048)
 
         img = np.load(f"new_data/img_data_{j}.npy")
@@ -61,15 +62,16 @@ def main():
         
         #pxls = np.concatenate([pxls[:3], pxls[4:]], axis=0)
         #locations = np.concatenate([locations[:3], locations[4:]], axis=0)
-        """
+        
         setup = tracker.SetupCamera()
         setup.run_extrinsics(img)
         
         track = tracker.CameraTracker(setup.rotation_matrix,
                                       setup.translation_vector,
                                       setup.z_pixel_map,
-                                      70.44*10**(-3),
-                                      np.zeros((1536, 1296), dtype=np.uint8)) #(120.94)*10**(-3))
+                                      np.zeros(img_shape, dtype=np.uint8),
+                                      img_shape,
+                                      (0,0))
          
         for i, pxl in enumerate(pxls):
             loc = extrinsic.global_coordinate_zpixel(pxl,
@@ -79,25 +81,22 @@ def main():
                 track.distortion_coeffs,
                 track.puck_z,
                 track.z_pixel_map)[0:2]
-                
-            table_width = 0.992
-            table_height = 1.993 
             
-            #print("---")
-                
-            loc = np.array([table_height - loc[0], table_width - loc[1]])
-            
-            table_bounds = np.array([1.993, 0.992])
-            loc2 = np.array([table_bounds[0] - locations[i,0], table_bounds[1]-locations[i,1]])
-            err.append([(loc2[0] - loc[0]) * 1e3, (loc2[1]-loc[1]) * 1e3])
+            err.append([(locations[i,0] - loc[0]) * 1e3, (locations[i,1]-loc[1]) * 1e3])
+            print("--")
+            print(locations[0])
+            print(loc[0])
+            print(locations[1])
+            print(loc[1])
             
             #print(loc)
             #print(loc2)
-         """
+         
     
-    """ 
-    np.save("calibration_err_test.npy", np.array(err)) 
+     
+    np.save("new_data/calibration_err_test.npy", np.array(err)) 
     print(np.array(err))
+    print(np.array(err).shape)
 
     bins = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, np.inf]
     counts, edges = np.histogram(err, bins=bins)
@@ -109,7 +108,42 @@ def main():
     for label, count in zip(labels, counts):
         percentage = 100 * count / total if total > 0 else 0
         print(f"{label:>6} mm: {count:>5} ({percentage:>5.1f}%)")
-    """
+        
+def plot_err():
+    err = np.load("new_data/calibration_err_test.npy")
+    
+    err = np.linalg.norm(err, axis=1)
+    bins = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, np.inf]
+    counts, edges = np.histogram(err, bins=bins)
+    labels = ['0-1', '1-2', '2-3', '3-4', '4-5', '5-6', '6-7', '7-8', '8-9', '9-10', '10+']
+
+    print("\nError Distribution:")
+    print("-" * 50)
+    total = len(err)
+    for label, count in zip(labels, counts):
+        percentage = 100 * count / total if total > 0 else 0
+        print(f"{label:>6} mm: {count:>5} ({percentage:>5.1f}%)")
+    
+
+    # 2. Define the bins
+    # We go from 0 to 3 with a step of 0.25
+    bin_size = 0.25
+    bins = np.arange(0, 3 + bin_size, bin_size)
+
+    # 3. Create the plot
+    plt.figure(figsize=(10, 6))
+    plt.hist(err, bins=bins, edgecolor='black', color='skyblue', alpha=0.7)
+
+    # 4. Formatting
+    plt.title(f'Distribution of Points (Bin Size: {bin_size})', fontsize=14)
+    plt.xlabel('Value Range', fontsize=12)
+    plt.ylabel('Frequency', fontsize=12)
+    plt.xticks(bins)  # This ensures the X-axis labels match your bin edges
+    plt.grid(axis='y', linestyle='--', alpha=0.6)
+
+    plt.savefig('new_data/err_distribution.png')
+    
 
 if __name__ == "__main__":
-    main()
+    plot_err()
+    #main()

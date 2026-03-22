@@ -157,6 +157,7 @@ def collect_data():
     #try:
     
     action_commands = []#np.load('data/actions_newp.npy')
+    """
     for idx in range(6):
         if idx%4 == 0:
             xf = np.array([0.85, 0.3])
@@ -166,7 +167,12 @@ def collect_data():
             xf = np.array([0.3, 0.85])
         elif idx%4 == 3:
             xf = np.array([0.3, 0.3])
-        action_commands.append(np.concatenate((xf, np.array([3.0,3.0]), np.array([1.0])), axis=0))
+        action_commands.append(np.concatenate((xf, np.array([5.0,5.0]), np.array([1.0])), axis=0))
+    action_commands = np.array(action_commands)
+    """
+    for idx in range(20):
+        xf = np.array([0.3+np.random.random()*(0.85-0.3), 0.3+np.random.random()*(0.85-0.3)])
+        action_commands.append(np.concatenate((xf, np.array([5.0,5.0]), np.array([0.2])), axis=0))
     action_commands = np.array(action_commands)
 
     
@@ -352,7 +358,7 @@ def collect_data():
             #print(pwms)
             #print("------")
             #print(dts)
-            with open("new_data/mallet_data_square2.csv", "w", newline="") as f:
+            with open("new_data/mallet_data_random.csv", "w", newline="") as f:
                 writer = csv.writer(f)
                 # Write header
                 writer.writerow(["x", "y", "Expected_x", "Expected_y", "Left_PWM", "Right_PWM", "dt"])

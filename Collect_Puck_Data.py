@@ -458,7 +458,10 @@ def system_loop(cam, load):
     while True:
     
         image = cam.GetNextImage()
-        img = image.GetData().reshape(img_shape)
+        img = image.GetData()
+        if img.size == 0:
+            continue
+        img = img.reshape(img_shape)
         puck_pos, opponent_mallet_pos, obstructed = track.track(img)
         image.Release()
         
@@ -478,7 +481,7 @@ def system_loop(cam, load):
         
         idx += 1
         if idx == len(puck_data):
-            with open("new_data/puck_data_noise.csv", "w", newline="") as f:
+            with open("new_data/puck_movement_data2.csv", "w", newline="") as f:
                 writer = csv.writer(f)
                 # Write header
                 writer.writerow(["x", "y", "dt", "obstructed", "visable"])

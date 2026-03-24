@@ -17,10 +17,10 @@ import queue
 import cv2
 import struct
 
-obs_dim = 38
-action_dim = 4
-height = 1.993
-width = 0.992
+obs_dim = 39
+action_dim = 5
+height = 2.362
+width = 1.144
 
 Vmax = 24 * 0.8
 table_bounds = np.array([height, width])
@@ -29,42 +29,27 @@ mallet_r = 0.1011 / 2
 margin_bounds = 0.04
 mallet_bounds = np.array([[margin_bounds + mallet_r, table_bounds[0]/2  - mallet_r/2], [margin_bounds+mallet_r, table_bounds[1]-margin_bounds-mallet_r]])
 
-
-class ScaledNormalParamExtractor(NormalParamExtractor):
-    def __init__(self, scale_factor=1.0):
-        super().__init__()
-        self.scale_factor = scale_factor
-
-    def forward(self, x):
-        loc, scale = super().forward(x)
-        #scale *= self.scale_factor
-        scale = 2*self.scale_factor/ (1+torch.exp(-scale)) - self.scale_factor + 0.001
-        return loc, scale
-
 policy_net = nn.Sequential(
-    nn.Linear(obs_dim, 1024),
-    nn.LayerNorm(1024),
-    nn.ReLU(),
-    nn.Linear(1024, 1024),
-    nn.LayerNorm(1024),
-    nn.ReLU(),
-    nn.Linear(1024, 512),
-    nn.LayerNorm(512),
-    nn.ReLU(),
-    nn.Linear(512, 256),
-    nn.ReLU(),
-    nn.Linear(256, 128),
-    nn.ReLU(),
-    nn.Linear(128, action_dim * 2),
-    ScaledNormalParamExtractor(),
-)
+            nn.Linear(obs_dim, 512),
+            nn.LayerNorm(512),
+            nn.LeakyReLU(0.01),
+            nn.Linear(512, 256),
+            nn.LayerNorm(256),
+            nn.LeakyReLU(0.01),
+            nn.Linear(256, 128),
+            nn.LeakyReLU(0.01),
+            nn.Linear(128, 64),
+            nn.LeakyReLU(),
+            nn.Linear(64, action_dim * 2),
+            NormalParamExtractor()
+        )
 
 policy_module = TensorDictModule(
     policy_net, in_keys=["observation"], out_keys=["loc", "scale"]
 )
 
-low = torch.tensor([mallet_r + 0.01, mallet_r + 0.01, 0, -1], dtype=torch.float32)
-high = torch.tensor([table_bounds[0]/2-mallet_r-0.01, table_bounds[1]-mallet_r-0.01, 1, 1], dtype=torch.float32)
+low = torch.tensor([mallet_r + 0.01, mallet_r + 0.01, 0, -1, 0], dtype=torch.float32)
+high = torch.tensor([table_bounds[0]/2-mallet_r-0.01, table_bounds[1]-mallet_r-0.01, 1, 1, 1], dtype=torch.float32)
 
 policy_module = ProbabilisticActor(
     module=policy_module,
@@ -79,35 +64,28 @@ policy_module = ProbabilisticActor(
 # Vx + Vy < 2*(Vmax)
 # sqrt(2* (2*Vmax)^2)
 
-checkpoint = torch.load("model_209.pth", map_location="cpu")
+checkpoint = torch.load("SAC_157.pth", map_location="cpu")
 policy_module.load_state_dict(checkpoint['policy_state_dict'])
 del checkpoint
 #policy_module.load_state_dict(torch.load("model_183.pth"), map_location=torch.device("cpu")) #8
-#policy_module.eval()
-
-#pullyR = 0.035755
-#a1 = 2.725e-05 
-#a2 = 7.575e-03  
-#a3 = 6.969e-02 
-#b1 = -1.996e-05 
-#b2 = -2.838e-03 
-#b3 = 3.688e-03 
+policy_module.eval()
 
 pullyR = 0.035755
-#a1 = 3.124e-05 
-#a2 = 9.974e-03  
-#a3 = 9.175e-02 
-#b1 = -3.026e-05 
-#b2 = -3.803e-03 
-#b3 = 1.025e-02 
 
 #Mauro coeffs
-a1 = 1.664e-05 
-a2 = 6.802e-03  
-a3 = 6.703e-02 
-b1 = -1.113e-05 
-b2 = -2.796e-03 
-b3 = 6.535e-03 
+#a1 = 1.664e-05 
+#a2 = 6.802e-03  
+#a3 = 6.703e-02 
+#b1 = -1.113e-05 
+#b2 = -2.796e-03 
+#b3 = 6.535e-03 
+
+a1 = 1.827e-05
+a2 = 9.7501e-03
+a3 = 6.5882e-02
+b1 = -6.90342e-06
+b2 = -4.5203e-03
+b3 = 5.4302e-03
 
 C1 = [Vmax * pullyR / 2, Vmax * pullyR / 2]
 C5 = [a1-b1, a1+b1]
@@ -315,8 +293,6 @@ def get_IC(t):
 
     return np.array(pos), np.array(vel), np.array(acc)
     
-    
-
 def update_path(x_0, x_p, x_pp, x_f, Vo):
     global C1
     global C2

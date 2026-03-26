@@ -21,21 +21,20 @@ import torch
 torch.set_num_threads(2)
 torch.set_num_interop_threads(1)
 
-
-table_bounds = np.array([1.9885, 0.995])
-obs_dim = 51
+table_bounds = np.array([2.362, 1.144])
+obs_dim = 39
 obs = np.zeros((obs_dim,), dtype=np.float32)
-obs[32:32+7] = np.array([0.8, 0.3, 0.6, 0.7, 0.2, 0.4, 0.03]) #wall res
-obs[32+7:32+14] = np.array([0.8, 0.3, 0.6, 0.7, 0.2, 0.4, 0.03]) #mallet res
-obs[32+14:] = np.array([ap.a1/ap.pullyR * 1e4, ap.a2/ap.pullyR * 1e1, ap.a3/ap.pullyR * 1e0, ap.b1/ap.pullyR * 1e4, ap.b2/ap.pullyR * 1e1])
+obs[-7:-1] = np.array([ap.a1/ap.pullyR * 1e4, ap.a2/ap.pullyR * 1e1, ap.a3/ap.pullyR * 1e0, ap.b1/ap.pullyR * 1e4, ap.b2/ap.pullyR * 1e1, ap.b3/ap.pullyR * 1e1])
+obs[-4:-1] = (-6.5e-06)/ap.pullyR * 1e4
 #e_n0, e_nr, e_nf, e_t0, e_tr, e_tf, std
 
-margin = 0.065
+margin = 0.1
 margin_bottom = 0.1
 
-mallet_r = 0.0508
-margin_bounds = 0.0
-mallet_bounds = np.array([[margin_bounds + mallet_r, table_bounds[0]/2  + mallet_r/2], [margin_bounds+mallet_r, table_bounds[1]-margin_bounds-mallet_r]])
+mallet_r = 0.1011 / 2
+puck_r = 0.0629 / 2
+
+num_points = 11
 
 Vmax = 24 * 0.8
 
@@ -50,6 +49,35 @@ def set_realtime_priority():
         print("Real-time priority set successfully")
     else:
         print("Failed to set real-time priority - run with sudo")
+        
+class CircularMalletBuffer:
+    def __init__(self, length: int):
+        """
+        Initialize a circular buffer for storing 3-float entries.
+        
+        Args:
+            length (int): Maximum number of entries in the buffer.
+        """
+        self.length = length
+        self.buffer = np.zeros((length, 3))
+        self.index = 0
+
+    def add(self, entry):
+        """Add one entry (3 floats) to the buffer."""
+        self.buffer[self.index] = entry
+        self.index = (self.index + 1) % self.length
+
+    def read(self) -> np.ndarray:
+        """
+        Return all buffer contents in chronological order.
+        
+        Returns:
+            np.ndarray: Array of shape (N, 3), where N ≤ length.
+        """
+        return np.vstack((self.buffer[self.index:], self.buffer[:self.index]))
+            
+mallet_buffer = CircularMalletBuffer(11)
+stored_buffer = bytearray()
         
 def check_isolation_status():
     """Check if CPU isolation is working properly"""

@@ -31,8 +31,8 @@ obs[-4:-1] = (-6.5e-06)/ap.pullyR * 1e4
 
 obs_flip = np.empty((obs_dim), dtype=np.float32)
 
-margin = 0.05
-margin_bottom = 0.05
+margin = 0.1
+margin_bottom = 0.1
 
 mallet_r = 0.1011 / 2
 puck_r = 0.0629 / 2
@@ -158,11 +158,12 @@ def configure_buffer_handling(cam):
     else:
         print("Unable to set Buffer Handling Mode")
 
-def configure_camera(cam, gain_val=30.0, exposure_val=100.0):
+
+def configure_camera(cam, gain_val=30.0, exposure_val=100.0, gamma_val=None, black_level_val=0, balance_ratio_val=3.6):
     # Get the camera node map
     nodemap = cam.GetNodeMap()
     
-    auto_modes = ["ExposureAuto", "GainAuto", "BalanceWhiteAuto", "GammaEnable"]
+    auto_modes = ["ExposureAuto", "GainAuto", "BalanceWhiteAuto"]
     for mode in auto_modes:
         try:
             auto_node = PySpin.CEnumerationPtr(nodemap.GetNode(mode))
@@ -173,6 +174,32 @@ def configure_camera(cam, gain_val=30.0, exposure_val=100.0):
                     print(f"{mode} disabled")
         except:
             print("Unable to disable " + mode)
+            
+    if gamma_val is None:
+        try:
+            auto_node = PySpin.CEnumerationPtr(nodemap.GetNode("GammaEnable"))
+            if PySpin.IsAvailable(auto_node) and PySpin.IsWritable(auto_node):
+                off_entry = auto_node.GetEntryByName("Off")
+                if PySpin.IsAvailable(off_entry):
+                    auto_node.SetIntValue(off_entry.GetValue())
+                    print("GammaEnable disabled")
+        except:
+            print("Unable to disable GammaEnable")
+    else:
+        try:
+            auto_node = PySpin.CEnumerationPtr(nodemap.GetNode("GammaEnable"))
+            if PySpin.IsAvailable(auto_node) and PySpin.IsWritable(auto_node):
+                on_entry = auto_node.GetEntryByName("On")
+                if PySpin.IsAvailable(on_entry):
+                    auto_node.SetIntValue(on_entry.GetValue())
+                    print("GammaEnable enabled")
+                    
+                    gamma = PySpin.CFloatPtr(nodemap.GetNode("Gamma"))
+                    if PySpin.IsAvailable(gamma) and PySpin.IsWritable(gamma):
+                        gamma.SetValue(gamma_val)
+                        print(f"Set Gamma to {gamma_val}")
+        except:
+            print("Unable to set Gamma")
 
     exposure_time = PySpin.CFloatPtr(nodemap.GetNode("ExposureTime"))
     if PySpin.IsAvailable(exposure_time) and PySpin.IsWritable(exposure_time):
@@ -186,19 +213,6 @@ def configure_camera(cam, gain_val=30.0, exposure_val=100.0):
         gain.SetValue(gain_val)
     else:
         print("Unable to set Gain.")
-        
-    # Try to disable image processing features that add latency
-    #processing_features = ["GammaEnable"] #, "SharpnessEnable", "SaturationEnable", 
-                          #"HueEnable", "DefectCorrectStaticEnable"]
-    
-    #for feature in processing_features:
-    #    try:
-    #        feature_node = PySpin.CBooleanPtr(nodemap.GetNode(feature))
-    #        if PySpin.IsAvailable(feature_node) and PySpin.IsWritable(feature_node):
-    #            feature_node.SetValue(False)
-    #            print(f"{feature} disabled")
-    #    except:
-    #        print("Unable to disable " + feature)
     
     try:
         balance_ratio = PySpin.CEnumerationPtr(nodemap.GetNode("BalanceRatioSelector"))
@@ -213,8 +227,8 @@ def configure_camera(cam, gain_val=30.0, exposure_val=100.0):
     try:
         balance_ratio = PySpin.CFloatPtr(nodemap.GetNode("BalanceRatio"))
         if PySpin.IsAvailable(balance_ratio) and PySpin.IsWritable(balance_ratio):
-            balance_ratio.SetValue(3.6)
-            print("balance ratio set to 3.6")
+            balance_ratio.SetValue(balance_ratio_val)
+            print(f"balance ratio set to {balance_ratio_val}")
     except:
         print("Unable to set balance ratio")
             
@@ -225,7 +239,37 @@ def configure_camera(cam, gain_val=30.0, exposure_val=100.0):
         print(f"Set throughput limit to {max_value}")
     else:
         print("Unable to read or write throughput limit mode.")
+        
+                
+    try:
+        auto_node = PySpin.CEnumerationPtr(nodemap.GetNode("BlackLevelSelector"))
+        if PySpin.IsAvailable(auto_node) and PySpin.IsWritable(auto_node):
+            all_entry = auto_node.GetEntryByName("All")
+            if PySpin.IsAvailable(all_entry):
+                auto_node.SetIntValue(all_entry.GetValue())
+                print("Black Level set to all")
+    except:
+        print("Unable to set black level to all")
 
+    # 1. Turn off Auto Black Level first (otherwise BlackLevel is often read-only)
+    auto_mode_node = PySpin.CEnumerationPtr(nodemap.GetNode("BlackLevelAuto"))
+    if PySpin.IsAvailable(auto_mode_node) and PySpin.IsWritable(auto_mode_node):
+        off_entry = auto_mode_node.GetEntryByName("Off")
+        if PySpin.IsAvailable(off_entry) and PySpin.IsReadable(off_entry):
+            auto_mode_node.SetIntValue(off_entry.GetValue())
+            print("Automatic Black Level turned Off.")
+
+    # 2. Access the BlackLevel value node
+    # Note: Usually this is a Float, not an Enumeration
+    black_level_node = PySpin.CFloatPtr(nodemap.GetNode("BlackLevel"))
+
+    if PySpin.IsAvailable(black_level_node) and PySpin.IsWritable(black_level_node):
+        # Ensure the value is within the camera's allowed range
+        val_to_set = max(black_level_node.GetMin(), min(black_level_node.GetMax(), black_level_val))
+        black_level_node.SetValue(val_to_set)
+        print(f"Set Black level to {val_to_set}")
+    else:
+        print("BlackLevel node is still not writable. Check 'BlackLevelSelector'.")
 
 def set_pixel_format(cam, mode="BayerRG8"):
     nodemap = cam.GetNodeMap()
@@ -292,23 +336,40 @@ def set_roi(cam, width, height, offset_x=0, offset_y=0):
     nodemap = cam.GetNodeMap()
     
     # Set width
-    width_node = PySpin.CIntegerPtr(nodemap.GetNode("Width"))
-    if PySpin.IsAvailable(width_node) and PySpin.IsWritable(width_node):
-        width_node.SetValue(width)
-    
-    # Set height  
-    height_node = PySpin.CIntegerPtr(nodemap.GetNode("Height"))
-    if PySpin.IsAvailable(height_node) and PySpin.IsWritable(height_node):
-        height_node.SetValue(height)
+    try:
+        width_node = PySpin.CIntegerPtr(nodemap.GetNode("Width"))
+        if PySpin.IsAvailable(width_node) and PySpin.IsWritable(width_node):
+            width_node.SetValue(width)
         
-    # Set offsets
-    offset_x_node = PySpin.CIntegerPtr(nodemap.GetNode("OffsetX"))
-    if PySpin.IsAvailable(offset_x_node) and PySpin.IsWritable(offset_x_node):
-        offset_x_node.SetValue(offset_x)
+        # Set height  
+        height_node = PySpin.CIntegerPtr(nodemap.GetNode("Height"))
+        if PySpin.IsAvailable(height_node) and PySpin.IsWritable(height_node):
+            height_node.SetValue(height)
+            
+        offset_x_node = PySpin.CIntegerPtr(nodemap.GetNode("OffsetX"))
+        if PySpin.IsAvailable(offset_x_node) and PySpin.IsWritable(offset_x_node):
+            offset_x_node.SetValue(offset_x)
+            
+        offset_y_node = PySpin.CIntegerPtr(nodemap.GetNode("OffsetY"))
+        if PySpin.IsAvailable(offset_y_node) and PySpin.IsWritable(offset_y_node):
+            offset_y_node.SetValue(offset_y)
+    except Exception as e:
+        offset_x_node = PySpin.CIntegerPtr(nodemap.GetNode("OffsetX"))
+        if PySpin.IsAvailable(offset_x_node) and PySpin.IsWritable(offset_x_node):
+            offset_x_node.SetValue(offset_x)
+            
+        offset_y_node = PySpin.CIntegerPtr(nodemap.GetNode("OffsetY"))
+        if PySpin.IsAvailable(offset_y_node) and PySpin.IsWritable(offset_y_node):
+            offset_y_node.SetValue(offset_y)
+            
+        width_node = PySpin.CIntegerPtr(nodemap.GetNode("Width"))
+        if PySpin.IsAvailable(width_node) and PySpin.IsWritable(width_node):
+            width_node.SetValue(width)
         
-    offset_y_node = PySpin.CIntegerPtr(nodemap.GetNode("OffsetY"))
-    if PySpin.IsAvailable(offset_y_node) and PySpin.IsWritable(offset_y_node):
-        offset_y_node.SetValue(offset_y)
+        # Set height  
+        height_node = PySpin.CIntegerPtr(nodemap.GetNode("Height"))
+        if PySpin.IsAvailable(height_node) and PySpin.IsWritable(height_node):
+            height_node.SetValue(height)
         
 def deq(q, xmin, xmax):
     y = q/32767
@@ -413,7 +474,7 @@ def apply_symmetry(t_obs):
     return obs_flip
     
 
-def system_loop(cam, load, pro):
+def system_loop(cam, load):
     """Optimized timing measurement with minimal overhead"""
     
     # Disable garbage collection during measurement
@@ -586,7 +647,6 @@ def system_loop(cam, load, pro):
     gc.collect()
     
     cam.BeginAcquisition()
-    track = None
     
     ser.reset_input_buffer()
     
@@ -606,7 +666,7 @@ def system_loop(cam, load, pro):
         track.process_frame(img)
         image.Release()
         
-    dt = 4.0768/1000
+    #dt = 4.0768/1000
     ser.reset_input_buffer()
     
     while ser.in_waiting < (num_points+1) * 11:
@@ -638,9 +698,13 @@ def system_loop(cam, load, pro):
         obs[20:22] = pos #add current mallet pos
         obs[22:24] = vel
         
-        if (obs[:2] > table_bounds[0]/2) | (obs[-1] & (((np.linalg.norm(obs[:2] - obs[4*3:4*3+2]) / (5/120.0)) > 0.5) | ((np.linalg.norm(obs[:2] - obs[4*2:4*2+2]) / (2/120.0)) > 0.5) | ((np.linalg.norm(obs[:2] - obs[4*1:4*1+2]) / (1/120.0)) > 0.5)) | ((np.linalg.norm(obs[:2] - obs[4*4:4*4+2]) / (11/120.0)) > 0.5)):
+        if (obs[0] > table_bounds[0]/2) or ((obs[-1]==1) and (((np.linalg.norm(obs[:2] - obs[4*3:4*3+2]) / (5/120.0)) > 0.5) or ((np.linalg.norm(obs[:2] - obs[4*2:4*2+2]) / (2/120.0)) > 0.5) or ((np.linalg.norm(obs[:2] - obs[4*1:4*1+2]) / (1/120.0)) > 0.5) or ((np.linalg.norm(obs[:2] - obs[4*4:4*4+2]) / (11/120.0)) > 0.5))):
+            if obs[-1] == 0:
+                print("defend")
             obs[-1] = 1.0
         else:
+            if obs[-1] == 1.0:
+                print("attack")
             obs[-1] = 0.0
         
         if left_hysteresis and obs[0] > table_bounds[0]/2 + 0.1:
@@ -680,8 +744,8 @@ def system_loop(cam, load, pro):
 
             Vo = action[2] * Vmax * np.array([1+action[3],1-action[3]])
             
-            Vo[0] = np.minimum(Vo[0], 2)
-            Vo[1] = np.minimum(Vo[1], 2)
+            Vo[0] = np.minimum(Vo[0], 9)
+            Vo[1] = np.minimum(Vo[1], 9)
             obs[30:32] = Vo
             #print("A")
             #print(xf)
@@ -734,7 +798,6 @@ def main():
         
     parser = argparse.ArgumentParser()
     parser.add_argument("--load", type=str2bool, default=False)
-    parser.add_argument("--pro", type=str2bool, default=True)
     args = parser.parse_args()
     
     system = PySpin.System.GetInstance()
@@ -757,9 +820,8 @@ def main():
     check_isolation_status()
     
     configure_buffer_handling(cam)
-    set_roi(cam,1296,1536,376,0)
 
-    system_loop(cam, args.load, args.pro)
+    system_loop(cam, args.load)
 
 if __name__ == "__main__":
     main()

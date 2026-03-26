@@ -172,7 +172,7 @@ def collect_data():
     """
     for idx in range(50):
         xf = np.array([0.3+np.random.random()*(0.85-0.3), 0.3+np.random.random()*(0.85-0.3)])
-        action_commands.append(np.concatenate((xf, np.array([8.0,8.0]), np.array([0.2])), axis=0))
+        action_commands.append(np.concatenate((xf, np.array([10*np.random.random() + 5.0, 10*np.random.random() + 5.0]), np.array([0.2])), axis=0))
     action_commands = np.array(action_commands)
 
     
@@ -358,7 +358,7 @@ def collect_data():
             #print(pwms)
             #print("------")
             #print(dts)
-            with open("new_data/mallet_data_random.csv", "w", newline="") as f:
+            with open("new_data/mallet_data_random_supercap.csv", "w", newline="") as f:
                 writer = csv.writer(f)
                 # Write header
                 writer.writerow(["x", "y", "Expected_x", "Expected_y", "Left_PWM", "Right_PWM", "dt"])

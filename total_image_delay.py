@@ -443,6 +443,7 @@ def get_mallet(ser):
             
 def get_init_conditions(pred=0):
     global mallet_buffer
+
     mallet_data = mallet_buffer.read()
     ts = np.cumsum(mallet_data[:,2])
     coef_x = np.polyfit(ts, mallet_data[:,0], 2)
@@ -461,7 +462,7 @@ def get_init_conditions(pred=0):
     acc = np.array([2*coef_x[0], \
                     2*coef_y[0]])
                     
-    return pos, vel, acc
+    return mallet_data[-1,0], vel, acc
     
 def apply_symmetry(t_obs):
     obs_flip[:] = t_obs
@@ -474,8 +475,10 @@ def apply_symmetry(t_obs):
     return obs_flip
     
 
-def system_loop(cam, load):
+def system_loop(cam):
     """Optimized timing measurement with minimal overhead"""
+    
+    times = np.zeros((500,), dtype=np.float64)
     
     # Disable garbage collection during measurement
     img_shape = (1450, 1300)
@@ -585,7 +588,7 @@ def system_loop(cam, load):
     for _ in range(20):
         image = cam.GetNextImage()
         img = image.GetData().reshape(img_shape)
-        track.process_frame(img)
+        track.process_frame(loaded_img)
         image.Release()
         
     #dt = 4.0768/1000
@@ -595,25 +598,44 @@ def system_loop(cam, load):
         pass
 
     get_mallet(ser)
-    #timer = time.perf_counter()
-    
-    timer = time.perf_counter()
+
     left_hysteresis = False
     symmetry = False
+    p_light_on = False
+    light_on = False
+    light_signal = 0
+    
     timer1 = time.perf_counter()
+    
+    times_idx = 0
+    
     while True:
     
+        p_light_on = light_on
+        light_on = False
         image = cam.GetNextImage()
         img = image.GetData().reshape(img_shape)
-        track.process_frame(img)
+        if img[light_center[0], light_center[1]] > 100:
+            light_on = True
+        if light_on and not p_light_on and light_signal == 0:
+            light_signal = 1
+        
+        track.process_frame(loaded_img)
         image.Release()
         
         get_mallet(ser)
         pos, vel, acc = get_init_conditions()
-            
-        #new_time = time.perf_counter()
-        #time_diff = new_time - timer
-        #timer = new_time
+        
+        if times_idx != 0:   
+            if pos[0] != times[times_idx-1]:
+                times[times_idx] = pos[0]
+                #print(times[i])
+                times_idx += 1
+        elif pos[0] != 0:
+            times[0] = pos[0]
+            #print(times[i])
+            times_idx += 1
+        
         obs[:20] = track.past_data.get()
         obs[24:26] = obs[20:22] #update past mallet
         obs[26:28] = obs[22:24]
@@ -649,7 +671,6 @@ def system_loop(cam, load):
 
         
         no_update = action[-1] > np.random.random()
-        #print(action)
 
         if not no_update:
             xf = action[:2]
@@ -685,20 +706,22 @@ def system_loop(cam, load):
 
             #new_pos = pos + vel * dt + 0.5 * acc * dt**2
             #new_vel = vel + acc * dt
-            data = ap.update_path(pos, vel, acc, xf, Vo)
+            data = ap.update_path(pos, vel, acc, xf, Vo, light_on=light_signal)
             ser.write(b'\n' + data + b'\n')
         
+        light_signal = 0
+        
+        p_light_on = light_on
+        light_on = False
         image = cam.GetNextImage()
         img = image.GetData().reshape(img_shape)
-        track.process_frame(img)
+        if img[light_center[0], light_center[1]] > 100:
+            light_on = True
+        track.process_frame(loaded_img)
         image.Release()
         
-        #get_mallet(ser)
-        #pos, vel, acc = get_init_conditions()
-            
-        #new_time = time.perf_counter()
-        #time_diff = new_time - timer
-        #timer = new_time
+        if not p_light_on and light_on:
+            light_signal = 2
             
     
     cam.EndAcquisition()

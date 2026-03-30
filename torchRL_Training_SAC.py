@@ -80,36 +80,11 @@ camera_period = 1/120.0
 """
 Mallet Delay
 
-Average interval: 5.9684ms
-Standard deviation: 0.6518ms
-Min interval: 4.5759ms
-Max interval: 7.5735ms
-Jitter range: 2.9975ms
-Actual FPS: 167.55
-50th percentile: 6.0860ms
-90th percentile: 6.8420ms
-95th percentile: 6.8471ms
-99th percentile: 6.8532ms
-99.9th percentile: 7.2442ms
-0.0-0.5ms: 0 frames (0.0%)
-0.5-1.0ms: 0 frames (0.0%)
-1.0-1.5ms: 0 frames (0.0%)
-1.5-2.0ms: 0 frames (0.0%)
-2.0-2.5ms: 0 frames (0.0%)
-2.5-3.0ms: 0 frames (0.0%)
-3.0-3.5ms: 0 frames (0.0%)
-3.5-4.0ms: 0 frames (0.0%)
-4.0-4.5ms: 0 frames (0.0%)
-4.5-5.0ms: 21 frames (4.2%)
-5.0-5.5ms: 171 frames (34.5%)
-5.5-6.0ms: 0 frames (0.0%)
-6.0-6.5ms: 172 frames (34.7%)
-6.5-7.0ms: 130 frames (26.3%)
-7.0-7.5ms: 0 frames (0.0%)
-7.5-8.0ms: 1 frames (0.2%)
-8.0-8.5ms: 0 frames (0.0%)
-8.5-9.0ms: 0 frames (0.0%)
-9.5-30.0ms: 0 frames (0.0%
+4.6-4.7ms: 16 frames (3.2%)
+5.3-5.4ms: 166 frames (33.5%)
+6.1-6.2ms: 158 frames (31.9%)
+6.8-6.9ms: 144 frames (29.1%)
+7.6-7.7ms: 2 frames (0.4%)
 """
 
 frames = [0, 1, 2, 5, 11]

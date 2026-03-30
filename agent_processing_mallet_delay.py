@@ -17,80 +17,77 @@ import queue
 import cv2
 import struct
 
+obs_dim = 39
+action_dim = 5
+height = 2.362
+width = 1.144
 
-obs_dim = 51
-action_dim = 4
-height = 1.9885
-width = 0.9905
-
-mallet_r = 0.0508
 Vmax = 24 * 0.8
 table_bounds = np.array([height, width])
 
-mallet_r = 0.0508
-margin_bounds = 0.0
-mallet_bounds = np.array([[margin_bounds + mallet_r, table_bounds[0]/2  + mallet_r/2], [margin_bounds+mallet_r, table_bounds[1]-margin_bounds-mallet_r]])
-
-
-class ScaledNormalParamExtractor(NormalParamExtractor):
-    def __init__(self, scale_factor=1.0):
-        super().__init__()
-        self.scale_factor = scale_factor
-
-    def forward(self, x):
-        loc, scale = super().forward(x)
-        #scale *= self.scale_factor
-        scale = 2*self.scale_factor/ (1+torch.exp(-scale)) - self.scale_factor + 0.001
-        return loc, scale
+mallet_r = 0.1011 / 2
+margin_bounds = 0.04
+mallet_bounds = np.array([[margin_bounds + mallet_r, table_bounds[0]/2  - mallet_r/2], [margin_bounds+mallet_r, table_bounds[1]-margin_bounds-mallet_r]])
 
 policy_net = nn.Sequential(
-    nn.Linear(obs_dim, 1024),
-    nn.LayerNorm(1024),
-    nn.ReLU(),
-    nn.Linear(1024, 1024),
-    nn.LayerNorm(1024),
-    nn.ReLU(),
-    nn.Linear(1024, 512),
-    nn.LayerNorm(512),
-    nn.ReLU(),
-    nn.Linear(512, 256),
-    nn.ReLU(),
-    nn.Linear(256, 128),
-    nn.ReLU(),
-    nn.Linear(128, action_dim * 2),
-    ScaledNormalParamExtractor(),
-)
+            nn.Linear(obs_dim, 512),
+            nn.LayerNorm(512),
+            nn.LeakyReLU(0.01),
+            nn.Linear(512, 256),
+            nn.LayerNorm(256),
+            nn.LeakyReLU(0.01),
+            nn.Linear(256, 128),
+            nn.LeakyReLU(0.01),
+            nn.Linear(128, 64),
+            nn.LeakyReLU(),
+            nn.Linear(64, action_dim * 2),
+            NormalParamExtractor()
+        )
 
 policy_module = TensorDictModule(
     policy_net, in_keys=["observation"], out_keys=["loc", "scale"]
 )
+
+low = torch.tensor([mallet_r + 0.01, mallet_r + 0.01, 0, -1, 0], dtype=torch.float32)
+high = torch.tensor([table_bounds[0]/2-mallet_r-0.01, table_bounds[1]-mallet_r-0.01, 1, 1, 1], dtype=torch.float32)
 
 policy_module = ProbabilisticActor(
     module=policy_module,
     in_keys=["loc", "scale"],
     distribution_class=TanhNormal,
     distribution_kwargs={
-        "low": torch.tensor([mallet_r, mallet_r, -1, 0]),
-        "high": torch.tensor([table_bounds[0]/2-mallet_r, table_bounds[1] - mallet_r, 1, 1]),
+        "low": low,
+        "high": high,
     },
     #default_interaction_type=tensordict.nn.InteractionType.RANDOM,
-    return_log_prob=False,
 )
 # Vx + Vy < 2*(Vmax)
 # sqrt(2* (2*Vmax)^2)
 
-#policy_module.load_state_dict(torch.load("policy_weights8.pth")) #8
-#policy_module.eval()
+checkpoint = torch.load("SAC_168.pth", map_location="cpu")
+policy_module.load_state_dict(checkpoint['policies'][0])
+del checkpoint
+#policy_module.load_state_dict(torch.load("model_183.pth"), map_location=torch.device("cpu")) #8
+policy_module.eval()
 
-pullyR = 0.035306
-a1 = 3.579*10**(-6)
-a2 = 0.00571
-a3 = (0.0596+0.0467)/2
-b1 = -1.7165*10**(-6)
-b2 = -0.002739
-b3 = 0
+pullyR = 0.035755
 
-C1 = [Vmax * pullyR / 2, Vmax * pullyR / 2] #[Vmax * pullyR / 2, Vmax * pullyR / 2]
+#Mauro coeffs
+#a1 = 1.664e-05 
+#a2 = 6.802e-03  
+#a3 = 6.703e-02 
+#b1 = -1.113e-05 
+#b2 = -2.796e-03 
+#b3 = 6.535e-03 
+
+a1 = 1.827e-05
+a2 = 9.7501e-03
+a3 = 6.5882e-02
+b1 = -6.90342e-06
+b2 = -4.5203e-03
+b3 = 5.4302e-03
+
+C1 = [Vmax * pullyR / 2, Vmax * pullyR / 2]
 C5 = [a1-b1, a1+b1]
 C6 = [a2-b2, a2+b2]
 C7 = [a3-b3, a3+b3]
@@ -134,6 +131,10 @@ for i in range(2):
 C2 = [0,0]
 C3 = [0,0]
 C4 = [0,0]
+
+Vf = [0,0]
+vt_1 = [0,0]
+vt_2 = [0,0]
 
 #A e^(at) + B e^(bt) + Ct + D
 def f(x, i, eat, ebt):
@@ -220,8 +221,8 @@ def solve_vt1(x_f):
     return [ax, ay]
 
 def solve_C1p(x, k):
-    if x <= 0:
-        return 1 - x
+    if x[0] <= 0:
+        return 1 - x[0]
     return C2[k]/C7[k] - (x[0]/(ab[k][1]*C7[k])*\
                 math.log((x[0]*CE[k][3])/(-x[0]*CE[k][1]+C2[k]*A2CE[k][1]+C3[k]*A3CE[k][1]+C4[k]*A4CE[k][1]))) - mallet_bounds[k][1]
 
@@ -230,12 +231,76 @@ def solve_C1n(x, k):
         return 1 + x[0]
     return C2[k]/C7[k] - (x[0]/(ab[k][1]*C7[k])*\
                 math.log((x[0]*CE[k][3])/(-x[0]*CE[k][1]+C2[k]*A2CE[k][1]+C3[k]*A3CE[k][1]+C4[k]*A4CE[k][1]))) - mallet_bounds[k][0]
+                
+def get_IC(t):
+    pos = [0,0]
+    vel = [0,0]
+    acc = [0,0]
+    
+    for i in range(2):
+        eat = np.exp(ab[i][0] * t)
+        ebt = np.exp(ab[i][1] * t)
+        
+        eatp = ab[i][0] * eat
+        ebtp = ab[i][1] * ebt
+        
+        eatpp = ab[i][0] * eatp
+        ebtpp = ab[i][1] * ebtp
+        
+        A_pos = [A2CE[i][0] * eat + A2CE[i][1] * ebt + A2CE[i][2],\
+                 A3CE[i][0] * eat + A3CE[i][1] * ebt,\
+                 A4CE[i][0] * eat + A4CE[i][1] * ebt]
+                 
+        A_vel = [A2CE[i][0] * eatp + A2CE[i][1] * ebtp,\
+                 A3CE[i][0] * eatp + A3CE[i][1] * ebtp,\
+                 A4CE[i][0] * eatp + A4CE[i][1] * ebtp]
+        
+        A_acc = [A2CE[i][0] * eatpp + A2CE[i][1] * ebtpp,\
+                 A3CE[i][0] * eatpp + A3CE[i][1] * ebtpp,\
+                 A4CE[i][0] * eatpp + A4CE[i][1] * ebtpp]
+        
+        #A_2 = A2CE[i][0] * eat + A2CE[i][1] * ebt + A2CE[i][2]
+        #A_3 = A3CE[i][0] * eat + A3CE[i][1] * ebt
+        #A_4 = A4CE[i][0] * eat + A4CE[i][1] * ebt
+        
+        f_t = [CE[i][0] * eat + CE[i][1] * ebt + CE[i][2]*t+CE[i][3],\
+               CE[i][0] * eatp + CE[i][1] * ebtp + CE[i][2],\
+               CE[i][0] * eatpp + CE[i][1] * ebtpp]
+    
+        g_a1 = [0,0,0]
+        g_a2 = [0,0,0]
+        
+        
+        tms = t-vt_1[i]
+        if tms > 0:
+            eatms = np.exp(ab[i][0]*tms)
+            ebtms = np.exp(ab[i][1]*tms)
+            g_a1[0] = CE[i][0] * eatms + CE[i][1] * ebtms + CE[i][2]*tms+CE[i][3]
+            g_a1[1] = CE[i][0] * ab[i][0] * eatms + CE[i][1] * ab[i][1] * ebtms + CE[i][2]
+            g_a1[2] = CE[i][0] * ab[i][0]**2 * eatms + CE[i][1] * ab[i][1]**2 * ebtms
+        
+        tms = t-vt_2[i]
+        if tms > 0:
+            eatms = np.exp(ab[i][0]*tms)
+            ebtms = np.exp(ab[i][1]*tms)
+            g_a2[0] = CE[i][0] * eatms + CE[i][1] * ebtms + CE[i][2]*tms+CE[i][3]
+            g_a2[1] = CE[i][0] * ab[i][0] * eatms + CE[i][1] * ab[i][1] * ebtms + CE[i][2]
+            g_a2[2] = CE[i][0] * ab[i][0]**2 * eatms + CE[i][1] * ab[i][1]**2 * ebtms
+        
+        pos[i] = 0.5 * Vf[i] * pullyR * (f_t[0] - 2 * g_a1[0] + g_a2[0]) + C2[i] * A_pos[0] + C3[i] * A_pos[1] + C4[i] * A_pos[2]
+        vel[i] = 0.5 * Vf[i] * pullyR * (f_t[1] - 2 * g_a1[1] + g_a2[1]) + C2[i] * A_vel[0] + C3[i] * A_vel[1] + C4[i] * A_vel[2]
+        acc[i] = 0.5 * Vf[i] * pullyR * (f_t[2] - 2 * g_a1[2] + g_a2[2]) + C2[i] * A_acc[0] + C3[i] * A_acc[1] + C4[i] * A_acc[2]
 
-def update_path(x_0, x_p, x_pp, x_f, Vo):
+    return np.array(pos), np.array(vel), np.array(acc)
+    
+def update_path(x_0, x_p, x_pp, x_f, Vo, bluepill_time=None):
     global C1
     global C2
     global C3
     global C4
+    global Vf
+    global vt_1
+    global vt_2
 
     C2 = [C5[0]*x_pp[0]+C6[0]*x_p[0]+C7[0]*x_0[0], C5[1]*x_pp[1]+C6[1]*x_p[1]+C7[1]*x_0[1]]
     C3 = [C5[0]*x_p[0]+C6[0]*x_0[0],C5[1]*x_p[1]+C6[1]*x_0[1]]
@@ -245,44 +310,54 @@ def update_path(x_0, x_p, x_pp, x_f, Vo):
 
     for j in range(2):
         if x_p[j] > 0 and C2[j]/C7[j] > mallet_bounds[j][1]:
-            val, info, ier, msg = fsolve(solve_C1p, x0=0.05, xtol=1e-4, full_output=True, args=(j))
-            if ier != 1:
-                for n in range(1,11):
-                    val, info, ier, msg = fsolve(solve_C1p, x0=0.05/(n*10), xtol=1e-4, full_output=True, args=(j))
-                    if ier == 1:
-                        break
-
+            if x_0[j] > mallet_bounds[j][1] or solve_C1p([Vmax*pullyR], j) > 0:
+                Vmin[j] = 2*Vmax
+                C1[j] = Vmin[j] * pullyR/2
+            else:
+                val, info, ier, msg = fsolve(solve_C1p, x0=0.05, xtol=1e-4, full_output=True, args=(j))
                 if ier != 1:
-                    print("C1p failed corvergence")
+                    val, info, ier, msg = fsolve(solve_C1p, x0=0.005, xtol=1e-4, full_output=True, args=(j))
+                    if ier != 1:
+                        Vmin[j] = 0.2
+                        C1[j] = Vmin[j] * pullyR/2
+                        print("C1p failed corvergence")
 
-            C1[j] = val[0]
-            Vmin[j] = C1[j] * 2/pullyR
+                C1[j] = val[0]
+                Vmin[j] = C1[j] * 2/pullyR
 
             #solve C1 > 0 so that x_over[j] = bounds[1]
         elif x_p[j] < 0 and C2[j]/C7[j] < mallet_bounds[j][0]:
-            val, info, ier, msg = fsolve(solve_C1n, x0=-0.05, xtol=1e-4, full_output=True, args=(j))
-            if ier != 1:
-                for n in range(1,11):
-                    val, info, ier, msg = fsolve(solve_C1n, x0=-0.05/(n*10), xtol=1e-4, full_output=True, args=(j))
-                    if ier == 1:
-                        break
-
+            if x_0[j] < mallet_bounds[j][0] or solve_C1n([-Vmax*pullyR], j) < 0:
+                Vmin[j] = 2*Vmax
+                C1[j] = -Vmin[j] * pullyR/2
+            else:
+                val, info, ier, msg = fsolve(solve_C1n, x0=-0.05, xtol=1e-4, full_output=True, args=(j))
                 if ier != 1:
-                    print("C1n failed corvergence")
+                    val, info, ier, msg = fsolve(solve_C1n, x0=-0.05/(10), xtol=1e-4, full_output=True, args=(j))
 
-            C1[j] = val[0]
+                    if ier != 1:
+                        Vmin[j] = 0.2
+                        C1[j] = -Vmin[j] * pullyR/2
+                        print("C1n failed corvergence")
 
-            Vmin[j] = abs(C1[j]) * 2/pullyR
+                C1[j] = val[0]
+
+                Vmin[j] = abs(C1[j]) * 2/pullyR
         # set magntiude of C1
         
     Vf = [0,0]
 
     Vmin[0] = max(Vmin[0], 0.01)
     Vmin[1] = max(Vmin[1], 0.01)
+    Vmin[1] = min(Vmin[1], 2*Vmax)
+    Vmin[0] = min(Vmin[0], 2*Vmax)
     if Vmin[0] + Vmin[1] > 2*Vmax:
         sum = Vmin[0] + Vmin[1] + 0.0001
         Vmin[0] *= 2*Vmax/sum
         Vmin[1] *= 2*Vmax/sum
+    #print("--")   
+    #print(Vmin)
+    #print(Vo)
 
     err_str = "None"
     if Vo[0] > Vmin[0] and Vo[1] > Vmin[1] and Vo[1] + Vo[0] < 2*Vmax:
@@ -361,64 +436,55 @@ def update_path(x_0, x_p, x_pp, x_f, Vo):
             except ValueError:
                 pass
 
-    
-
     vt_1 = solve_vt1(x_f)
-    vt_2 = [int((2*vt_1[0] - x_f[0]*C7[0]/C1[0]+C2[0]/C1[0])*10000), int((2*vt_1[1]-x_f[1]*C7[1]/C1[1]+C2[1]/C1[1])*10000)]
-    vt_1 = [int((vt_1[0][0]) * 10000), int((vt_1[1][0])*10000)]
-
-    Vf  = [int(2*C1[0]/pullyR*10000), int(2*C1[1]/pullyR*10000)]
-
-    C2 = [int(val*100000000) for val in C2]
-    C3 = [int(val*100000000) for val in C3]
-    C4 = [int(val*100000000) for val in C4]
-    C4[0] = int(x_p[0] * 100000)
+    vt_1 = [vt_1[0][0], vt_1[1][0]]
+    vt_2 = [2*vt_1[0] - x_f[0]*C7[0]/C1[0]+C2[0]/C1[0], 2*vt_1[1]-x_f[1]*C7[1]/C1[1]+C2[1]/C1[1]]
+    vt_2_int = [int(val*10000) for val in vt_2]
     
-    sum = vt_1[0] + vt_1[1] + vt_2[0] + vt_2[1] + Vf[0] + Vf[1] + C2[0] + C2[1] + C3[0] + C3[1] + C4[0] + C4[1]
+    vt_1_int = [int(val*10000) for val in vt_1]
+
+    Vf = [2*C1[0]/pullyR, 2*C1[1]/pullyR]
+    Vf_int  = [int(val*10000) for val in Vf]
     
+    #print("data")
+    #print(x_0)
+    #print(x_p)
+    #print(x_pp)
+    #print(np.array(vt_1)/10000.0)
+    #print(np.array(vt_2)/10000.0)
+    #print(np.array(Vf)/10000.0)
+    
+    C2_int = [int(val*100000000) for val in C2]
+    C3_int = [int(val*100000000) for val in C3]
+    C4_int = [int(val*100000000) for val in C4]
+
+    if bluepill_time is None:
+        checksum = vt_1_int[0] ^ vt_1_int[1] ^ vt_2_int[0] ^ vt_2_int[1] ^ Vf_int[0] ^ Vf_int[1] ^ C2_int[0] ^ C2_int[1] ^ C3_int[0] ^ C3_int[1] ^ C4_int[0] ^ C4_int[1]
+        
+        data = struct.pack('<iiiiiiiiiiiii',\
+                           np.int32(vt_1_int[0]), np.int32(vt_1_int[1]),\
+                           np.int32(vt_2_int[0]), np.int32(vt_2_int[1]),\
+                           np.int32(Vf_int[0]), np.int32(Vf_int[1]),\
+                           np.int32(C2_int[0]), np.int32(C2_int[1]),\
+                           np.int32(C3_int[0]), np.int32(C3_int[1]),\
+                           np.int32(C4_int[0]), np.int32(C4_int[1]),\
+                           np.int32(checksum))
+        
+        return data
+
+    C4_0 = int(bluepill_time * 100000)
+    checksum = vt_1_int[0] ^ vt_1_int[1] ^ vt_2_int[0] ^ vt_2_int[1] ^ Vf_int[0] ^ Vf_int[1] ^ C2_int[0] ^ C2_int[1] ^ C3_int[0] ^ C3_int[1] ^ C4_0 ^ C4_int[1]
+        
     data = struct.pack('<iiiiiiiiiiiii',\
-                       np.int32(vt_1[0]), np.int32(vt_1[1]),\
-                       np.int32(vt_2[0]), np.int32(vt_2[1]),\
-                       np.int32(Vf[0]), np.int32(Vf[1]),\
-                       np.int32(C2[0]), np.int32(C2[1]),\
-                       np.int32(C3[0]), np.int32(C3[1]),\
-                       np.int32(C4[0]), np.int32(C4[1]),\
-                       np.int32(sum))
+                       np.int32(vt_1_int[0]), np.int32(vt_1_int[1]),\
+                       np.int32(vt_2_int[0]), np.int32(vt_2_int[1]),\
+                       np.int32(Vf_int[0]), np.int32(Vf_int[1]),\
+                       np.int32(C2_int[0]), np.int32(C2_int[1]),\
+                       np.int32(C3_int[0]), np.int32(C3_int[1]),\
+                       np.int32(C4_0), np.int32(C4_int[1]),\
+                       np.int32(checksum))
     
     return data
-
-def mallet_calibration(ser):
-    print("mallet_calibration")
-    latest_msg = None
-    while latest_msg is None:
-        if ser.in_waiting:
-            latest_msg = ser.read(ser.in_waiting).decode('utf-8')
-
-    print(latest_msg) # ready to home
-
-    print("State > ^ [enter]")
-    input()
-    print("Place extrusions [enter]")
-    input()
-    print("Place mallet bottom right [enter]")
-    input()
-    ser.write("x\n".encode())
-
-    latest_msg = None
-    while latest_msg is None:
-        if ser.in_waiting:
-            latest_msg = ser.read(ser.in_waiting).decode('utf-8')
-    print(latest_msg) #confirmation of X
-
-    print("Place mallet bottom left [enter]")
-    input()
-    ser.write("x\n".encode())
-
-    latest_msg = None
-    while latest_msg is None:
-        if ser.in_waiting:
-            latest_msg = ser.read(ser.in_waiting).decode('utf-8')
-    print(latest_msg) #confirmation of Y
 
 def generate_top_down_view(puck_pos, mallet_pos, op_mallet_pos):
 
@@ -437,3 +503,4 @@ def generate_top_down_view(puck_pos, mallet_pos, op_mallet_pos):
     cv2.circle(top_down_image, (x_img, y_img), int(mallet_r* 500), (0, 255, 0), -1)
     cv2.imshow("top_down_table", top_down_image)
     cv2.waitKey(1)
+

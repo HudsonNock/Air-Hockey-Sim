@@ -689,9 +689,9 @@ def system_loop(cam, load):
         get_mallet(ser)
         pos, vel, acc = get_init_conditions()
             
-        new_time = time.perf_counter()
-        time_diff = new_time - timer
-        timer = new_time
+        #new_time = time.perf_counter()
+        #time_diff = new_time - timer
+        #timer = new_time
         obs[:20] = track.past_data.get()
         obs[24:26] = obs[20:22] #update past mallet
         obs[26:28] = obs[22:24]
@@ -769,12 +769,12 @@ def system_loop(cam, load):
         track.process_frame(img)
         image.Release()
         
-        get_mallet(ser)
-        pos, vel, acc = get_init_conditions()
+        #get_mallet(ser)
+        #pos, vel, acc = get_init_conditions()
             
-        new_time = time.perf_counter()
-        time_diff = new_time - timer
-        timer = new_time
+        #new_time = time.perf_counter()
+        #time_diff = new_time - timer
+        #timer = new_time
             
     
     cam.EndAcquisition()

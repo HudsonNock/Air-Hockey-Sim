@@ -85,6 +85,13 @@ Mallet Delay
 6.1-6.2ms: 158 frames (31.9%)
 6.8-6.9ms: 144 frames (29.1%)
 7.6-7.7ms: 2 frames (0.4%)
+
+FPS: 119.96
+
+Image Delay
+
+Mean 13.38839 ms
+range +- 0.28039
 """
 
 frames = [0, 1, 2, 5, 11]

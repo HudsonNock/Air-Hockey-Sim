@@ -360,7 +360,7 @@ def collect_data():
             #print(pwms)
             #print("------")
             #print(dts)
-            with open("new_data/mallet_data_random_supercap_feedback_12_10V.csv", "w", newline="") as f:
+            with open("new_data/mallet_data_random_supercap_feedback_13_10V.csv", "w", newline="") as f:
                 writer = csv.writer(f)
                 # Write header
                 writer.writerow(["x", "y", "Expected_x", "Expected_y", "Left_PWM", "Right_PWM", "dt"])

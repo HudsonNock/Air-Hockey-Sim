@@ -16,7 +16,7 @@ import struct
 import tensordict
 from tensordict import TensorDict
 import torch
-import agent_processing as ap
+import agent_processing_camera_delay as ap
 import argparse
 import csv
 
@@ -433,7 +433,7 @@ def get_mallet(ser):
             print(stored_buffer)
             print(1/0)
         else:
-            entry = np.array([deq(p0, -1, 2), deq(p1, -1, 2), deq(dt1, 0, 3) / 1000.0])
+            entry = np.array([deq(p0, 0, 30), deq(p1, -1, 2), deq(dt1, 0, 3) / 1000.0])
             mallet_buffer.add(entry)
         
         if frame_end+1 < len(stored_buffer):
@@ -462,7 +462,9 @@ def get_init_conditions(pred=0):
     acc = np.array([2*coef_x[0], \
                     2*coef_y[0]])
                     
-    return mallet_data[-1,0], vel, acc
+    pos[0] = mallet_data[-1, 0]
+                    
+    return pos, vel, acc
     
 def apply_symmetry(t_obs):
     obs_flip[:] = t_obs
@@ -478,7 +480,7 @@ def apply_symmetry(t_obs):
 def system_loop(cam):
     """Optimized timing measurement with minimal overhead"""
     
-    times = np.zeros((500,), dtype=np.float64)
+    times = np.zeros((1000,), dtype=np.float64)
     
     # Disable garbage collection during measurement
     img_shape = (1450, 1300)
@@ -567,6 +569,7 @@ def system_loop(cam):
     
     get_mallet(ser)
     pos, vel, acc = get_init_conditions()
+    pos[0] = 0.4
 
     data = ap.update_path(pos, vel, acc, pos + np.array([0.004,0.005]), np.array([3,3]))
 
@@ -575,15 +578,27 @@ def system_loop(cam):
     light_center = [1200, 750]
         
     image = cam.GetNextImage()
-    img = image.GetData().reshape(img_shape)
+    img = image.GetData().reshape(img_shape).copy()
+    image.Release()
+    found_light = False
     for n in range(img_shape[0] // 10):
         for m in range(img_shape[1] // 10):
-            if img[n*10, m*10] > 200:
+            if img[n*10, m*10] > 250:
                 light_center[0] = n*10
                 light_center[1] = m*10
-                break
+                found_light = True
+                print("A")
+                if found_light:
+                    break
+        if found_light:
+            break
+            
+    print(light_center)
+    cv2.circle(img, np.array([light_center[1], light_center[0]]), 200, 150, -1)
+    cv2.imshow("img", img[::2, ::2])
+    cv2.waitKey(0)
                 
-    loaded_img = cv2.imread("vision_delay_img.bmp", cv2.IMREAD_GRAYSCALE)
+    loaded_img = cv2.imread("air_hockey_camera_delay_img.bmp", cv2.IMREAD_GRAYSCALE)
     
     for _ in range(20):
         image = cam.GetNextImage()
@@ -628,9 +643,13 @@ def system_loop(cam):
         
         if times_idx != 0:   
             if pos[0] != times[times_idx-1]:
+                if times_idx % 100 == 0:
+                    print(times_idx)
                 times[times_idx] = pos[0]
                 #print(times[i])
                 times_idx += 1
+                if times_idx == len(times):
+                    break
         elif pos[0] != 0:
             times[0] = pos[0]
             #print(times[i])
@@ -644,12 +663,10 @@ def system_loop(cam):
         
         if (obs[0] > table_bounds[0]/2) or ((obs[-1]==1) and (((np.linalg.norm(obs[:2] - obs[4*3:4*3+2]) / (5/120.0)) > 0.5) or ((np.linalg.norm(obs[:2] - obs[4*2:4*2+2]) / (2/120.0)) > 0.5) or ((np.linalg.norm(obs[:2] - obs[4*1:4*1+2]) / (1/120.0)) > 0.5) or ((np.linalg.norm(obs[:2] - obs[4*4:4*4+2]) / (11/120.0)) > 0.5))):
             if obs[-1] == 0:
-                print("defend")
-            obs[-1] = 1.0
+                obs[-1] = 1.0
         else:
             if obs[-1] == 1.0:
-                print("attack")
-            obs[-1] = 0.0
+                obs[-1] = 0.0
         
         if left_hysteresis and obs[0] > table_bounds[0]/2 + 0.1:
             left_hysteresis = False
@@ -672,42 +689,42 @@ def system_loop(cam):
         
         no_update = action[-1] > np.random.random()
 
-        if not no_update:
-            xf = action[:2]
-            
-            xf[0] = np.maximum(margin_bottom+mallet_r, xf[0])
-            xf[0] = np.minimum(table_bounds[0]/2-mallet_r, xf[0])
+        #if not no_update:
+        xf = action[:2]
+        
+        xf[0] = np.maximum(margin_bottom+mallet_r, xf[0])
+        xf[0] = np.minimum(table_bounds[0]/2-mallet_r, xf[0])
 
-            xf[1] = np.maximum(margin+mallet_r, xf[1])
-            xf[1] = np.minimum(table_bounds[1]-margin-mallet_r, xf[1])
-            
-            if ((xf[0] < (mallet_r + 2*puck_r + 0.01)) & (obs[0] < obs[20])):
-                xf[0] = mallet_r + 2*puck_r + 0.01
-            if ((xf[1] < (mallet_r + 2*puck_r + 0.01)) & (obs[1] < obs[21])):
-                xf[1] = mallet_r + 2*puck_r + 0.01
-            elif ((xf[1] > (table_bounds[1] - mallet_r - 2*puck_r - 0.01)) & (obs[1] > obs[21])):
-                xf[1] = table_bounds[1] - mallet_r - 2*puck_r - 0.01
+        xf[1] = np.maximum(margin+mallet_r, xf[1])
+        xf[1] = np.minimum(table_bounds[1]-margin-mallet_r, xf[1])
+        
+        if ((xf[0] < (mallet_r + 2*puck_r + 0.01)) & (obs[0] < obs[20])):
+            xf[0] = mallet_r + 2*puck_r + 0.01
+        if ((xf[1] < (mallet_r + 2*puck_r + 0.01)) & (obs[1] < obs[21])):
+            xf[1] = mallet_r + 2*puck_r + 0.01
+        elif ((xf[1] > (table_bounds[1] - mallet_r - 2*puck_r - 0.01)) & (obs[1] > obs[21])):
+            xf[1] = table_bounds[1] - mallet_r - 2*puck_r - 0.01
 
-            Vo = action[2] * Vmax * np.array([1+action[3],1-action[3]])
+        Vo = action[2] * Vmax * np.array([1+action[3],1-action[3]])
 
-            obs[28:30] = xf
-            obs[30:32] = Vo
-            #print("A")
-            #print(xf)
-            #print(Vo)
-            
-            #Vo[0] = 7
-            #Vo[1] = 7
-            #obs[28:32] = np.concatenate([xf, Vo], axis=0)
-            
-            time_passed = time.perf_counter() - timer1
-            timer1 = time.perf_counter()
-            pos, vel, acc = ap.get_IC(time_passed)
+        obs[28:30] = xf
+        obs[30:32] = Vo
+        #print("A")
+        #print(xf)
+        #print(Vo)
+        
+        #Vo[0] = 7
+        #Vo[1] = 7
+        #obs[28:32] = np.concatenate([xf, Vo], axis=0)
+        
+        time_passed = time.perf_counter() - timer1
+        timer1 = time.perf_counter()
+        pos, vel, acc = ap.get_IC(time_passed)
 
-            #new_pos = pos + vel * dt + 0.5 * acc * dt**2
-            #new_vel = vel + acc * dt
-            data = ap.update_path(pos, vel, acc, xf, Vo, light_on=light_signal)
-            ser.write(b'\n' + data + b'\n')
+        #new_pos = pos + vel * dt + 0.5 * acc * dt**2
+        #new_vel = vel + acc * dt
+        data = ap.update_path(pos, vel, acc, xf, Vo, light_on=light_signal)
+        ser.write(b'\n' + data + b'\n')
         
         light_signal = 0
         
@@ -723,207 +740,10 @@ def system_loop(cam):
         if not p_light_on and light_on:
             light_signal = 2
             
-    
-    cam.EndAcquisition()
-
-def str2bool(v):
-    if isinstance(v, bool):
-        return v
-    if v.lower() in ('yes', 'true', 't', '1'):
-        return True
-    elif v.lower() in ('no', 'false', 'f', '0'):
-        return False
-    else:
-        raise argparse.ArgumentTypeError('Boolean value expected.')
-
-
-def main():
-    if os.geteuid() != 0:
-        print("Warning: Not running as root. Real-time performance may be limited.")
-        print("Run with: sudo python3 script.py")
-        return
-        
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--load", type=str2bool, default=False)
-    args = parser.parse_args()
-    
-    system = PySpin.System.GetInstance()
-    
-    # Retrieve list of cameras from the system
-    cam_list = system.GetCameras()
-    num_cameras = cam_list.GetSize()
-    
-    if num_cameras == 0:
-        print("No cameras detected!")
-        cam_list.Clear()
-        system.ReleaseInstance()
-        return
-    
-    # Select the first camera
-    cam = cam_list.GetByIndex(0)
-    cam.Init()
-    set_realtime_priority()
-    
-    check_isolation_status()
-    
-    configure_buffer_handling(cam)
-
-    system_loop(cam, args.load)
-
-if __name__ == "__main__":
-    main()
-
-def precise_timing_measurement(cam, N_TESTS=500):
-    """Optimized timing measurement with minimal overhead"""
-    
-    # Pre-allocate arrays
-    times = np.zeros(N_TESTS, dtype=np.float64)
-    
-    # Disable garbage collection during measurement
-
-    try:
-    
-        PORT = '/dev/ttyUSB0'  # Adjust this to COM port or /dev/ttyUSBx
-        BAUD = 460800
-
-        # === CONNECT ===
-        ser = serial.Serial(PORT, BAUD, timeout=0)
-
-        time.sleep(1)
-        
-        cam.BeginAcquisition()
-        
-        # Warm up - discard first few frames
-        img_shape = (1536, 1296)
-        light_center = [1200, 750]
-        
-        image = cam.GetNextImage()
-        img = image.GetData().reshape(img_shape)
-        for n in range(154):
-            for m in range(130):
-                if img[n*10, m*10] > 200:
-                    light_center[0] = n*10
-                    light_center[1] = m*10
-                    break
-        
-        image = cam.GetNextImage()
-        img = image.GetData().reshape(img_shape)
-        print(img[light_center[0], light_center[1]]) 
-        image.Release()
-        
-        setup = tracker.SetupCamera()
-        setup_img = cv2.imread("jump_bright.bmp", cv2.IMREAD_GRAYSCALE)[:,376:376+1296]
-        setup.run_extrinsics(setup_img)
-        
-        track = tracker.CameraTracker(setup.rotation_matrix,
-                                      setup.translation_vector,
-                                      setup.z_pixel_map,
-                                      (120.94)*10**(-3))
-        del setup
-        del setup_img
-        loaded_img = cv2.imread("jump.bmp", cv2.IMREAD_GRAYSCALE)[:,376:376+1296]
-        
-        ser.write(b'\n')
-        while ser.in_waiting == 0:
-            continue
-        #time.sleep(0.1)
-        #print(ser.read(ser.in_waiting))
-        ser.write(b'\n')
-        
-        gc.collect()
-        
-        
-        i=0
-        p_light_on = False
-        light_on = False
-        light_signal = 0
-        timer1 = time.perf_counter()
-        dt = 4.0768/1000
-        while i < N_TESTS:
-            p_light_on = light_on
-            light_on = False
-            image = cam.GetNextImage()
-            img = image.GetData().reshape(img_shape)
-            if img[light_center[0], light_center[1]] > 100:
-                light_on = True
-            if light_on and not p_light_on and light_signal == 0:
-                light_signal = 1
-            track.process_frame(loaded_img)
-            image.Release()
-            
-            passed = False
-            while not passed:
-                pos, vel, acc, passed = get_mallet(ser)
-                
-            if i != 0:   
-                if pos[0] != times[i-1]:
-                    times[i] = pos[0]
-                    #print(times[i])
-                    i += 1
-            elif pos[0] != 0:
-                times[i] = pos[0]
-                #print(times[i])
-                i += 1
-                    
-            pos[0] = 0.5
-            pos[1] = 0.5
-            vel[0] = 0
-            vel[1] = 0.3
-                
-            obs[:20] = track.past_data.get()
-            obs[24:26] = obs[20:22] #update past mallet
-            obs[26:28] = obs[22:24]
-            obs[20:22] = pos #add current mallet pos
-            obs[22:24] = vel
-
-            tensor_obs = TensorDict({"observation": torch.tensor(obs, dtype=torch.float32)})
-                           
-            with torch.no_grad():
-            	policy_out = ap.policy_module(tensor_obs)
-
-            action = policy_out["action"].detach().numpy()
-            xf = action[:2]
-
-            xf[0] = np.maximum(margin_bottom+mallet_r, xf[0])
-            xf[0] = np.minimum(table_bounds[0]/2-mallet_r, xf[0])
-
-            xf[1] = np.maximum(margin+mallet_r, xf[1])
-            xf[1] = np.minimum(table_bounds[1]-margin-mallet_r, xf[1])
-
-            Vo = action[3] * Vmax * np.array([1+action[2],1-action[2]])
-            obs[28:32] = np.concatenate([xf, Vo], axis=0)
-            passed = False
-            while not passed:
-                pos, vel, acc, passed = get_mallet(ser)
-            #if light_signal == 2:
-            #    print(light_signal)
-            new_pos = pos + vel * dt + 0.5 * acc * dt**2
-            new_vel = vel + acc * dt
-            data = ap.update_path(pos, vel, acc, xf, Vo, light_on=light_signal)
-            light_signal = 0
-            #print("writing")
-            #print(len(b'\n' + data + b'\n'))
-            ser.write(b'\n' + data + b'\n')
-            #time.sleep(100)
-            
-            p_light_on = light_on
-            light_on = False
-            image = cam.GetNextImage()
-            img = image.GetData().reshape(img_shape)
-            if img[light_center[0], light_center[1]] > 100:
-                light_on = True
-            track.process_frame(loaded_img)
-            image.Release()
-            
-            if not p_light_on and light_on:
-                light_signal = 2
-        
-        cam.EndAcquisition()
-    except Exception as e:
-        print("err")
-        print(e)
-        
     times = times[5:]
+    
+    print(times)
+    np.save("new_data/camera_delay_times.npy", times)
     
     # Analyze timing
     avg_interval = np.mean(times)
@@ -955,7 +775,18 @@ def precise_timing_measurement(cam, N_TESTS=500):
         count = np.sum((times >= min_r) & (times < max_r))
         percentage = (count / len(times)) * 100
         print(f"{min_r:.1f}-{max_r:.1f}ms: {count} frames ({percentage:.1f}%)")
+    
+    cam.EndAcquisition()
 
+def str2bool(v):
+    if isinstance(v, bool):
+        return v
+    if v.lower() in ('yes', 'true', 't', '1'):
+        return True
+    elif v.lower() in ('no', 'false', 'f', '0'):
+        return False
+    else:
+        raise argparse.ArgumentTypeError('Boolean value expected.')
 
 
 def main():
@@ -978,28 +809,14 @@ def main():
     
     # Select the first camera
     cam = cam_list.GetByIndex(0)
-    try:
-        cam.Init()
-        set_realtime_priority()
-        
-        check_isolation_status()
-        
-        configure_buffer_handling(cam)
-        configure_camera(cam)
-        set_pixel_format(cam)
-        set_roi(cam,1296,1536,376,0)
-        set_frame_rate(cam)
+    cam.Init()
+    set_realtime_priority()
+    
+    check_isolation_status()
+    
+    configure_buffer_handling(cam)
 
-        precise_timing_measurement(cam)
-
-    except Exception as ex: #PySpin.SpinnakerException as ex:
-        print("Error: %s" % ex)
-    finally:
-        cam.EndAcquisition()
-        cam.DeInit()
-        del cam
-        cam_list.Clear()
-        system.ReleaseInstance()
+    system_loop(cam)
 
 if __name__ == "__main__":
     main()

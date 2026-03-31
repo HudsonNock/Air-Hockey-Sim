@@ -293,7 +293,7 @@ def get_IC(t):
 
     return np.array(pos), np.array(vel), np.array(acc)
     
-def update_path(x_0, x_p, x_pp, x_f, Vo, light_on == 0):
+def update_path(x_0, x_p, x_pp, x_f, Vo, light_on = 0):
     global C1
     global C2
     global C3
@@ -459,11 +459,13 @@ def update_path(x_0, x_p, x_pp, x_f, Vo, light_on == 0):
     C4_int = [int(val*100000000) for val in C4]
     
     if light_on == 1:
-        C4[0] = 75345433
+        C4_0 = 75345433
     elif light_on == 2:
-        C4[0] = 75345432
+        C4_0 = 75345432
+    else:
+    	C4_0 = C4_int[0]
 
-    checksum = vt_1_int[0] ^ vt_1_int[1] ^ vt_2_int[0] ^ vt_2_int[1] ^ Vf_int[0] ^ Vf_int[1] ^ C2_int[0] ^ C2_int[1] ^ C3_int[0] ^ C3_int[1] ^ C4_int[0] ^ C4_int[1]
+    checksum = vt_1_int[0] ^ vt_1_int[1] ^ vt_2_int[0] ^ vt_2_int[1] ^ Vf_int[0] ^ Vf_int[1] ^ C2_int[0] ^ C2_int[1] ^ C3_int[0] ^ C3_int[1] ^ C4_0 ^ C4_int[1]
     
     data = struct.pack('<iiiiiiiiiiiii',\
                        np.int32(vt_1_int[0]), np.int32(vt_1_int[1]),\
@@ -471,7 +473,7 @@ def update_path(x_0, x_p, x_pp, x_f, Vo, light_on == 0):
                        np.int32(Vf_int[0]), np.int32(Vf_int[1]),\
                        np.int32(C2_int[0]), np.int32(C2_int[1]),\
                        np.int32(C3_int[0]), np.int32(C3_int[1]),\
-                       np.int32(C4_int[0]), np.int32(C4_int[1]),\
+                       np.int32(C4_0), np.int32(C4_int[1]),\
                        np.int32(checksum))
     
     return data

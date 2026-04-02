@@ -156,7 +156,7 @@ def collect_data():
     # Disable garbage collection during measurement
     #try:
     
-    action_commands = []#np.load('data/actions_newp.npy')
+    action_commands = np.load('new_data/occilation_actions_np.npy')[-400:]
     """
     for idx in range(6):
         if idx%4 == 0:
@@ -170,6 +170,8 @@ def collect_data():
         action_commands.append(np.concatenate((xf, np.array([5.0,5.0]), np.array([1.0])), axis=0))
     action_commands = np.array(action_commands)
     """
+    
+    """
     for idx in range(50):
         xf = np.array([0.3+np.random.random()*(0.85-0.3), 0.3+np.random.random()*(0.85-0.3)])
         action_commands.append(np.concatenate((xf, np.array([(24*0.8-3)*np.random.random() + 3.0, (24*0.8-3)*np.random.random() + 3.0]), np.array([(0.2-0.13)*np.random.random() + 0.13])), axis=0))
@@ -180,6 +182,7 @@ def collect_data():
         
     #np.array([3, 3]), np.array([0.2])), axis=0))
     action_commands = np.array(action_commands)
+    """
 
     
     PORT = '/dev/ttyUSB0'  # Adjust this to COM port or /dev/ttyUSBx
@@ -275,12 +278,14 @@ def collect_data():
             #xf = np.array([np.random.random() * (0.4) + 0.3, np.random.random() * 0.4 + 0.3])
             #Vo = np.array([np.random.random() * (24*0.8-10) + 10, np.random.random() * (24*0.8-10) + 10])
             xf = action_commands[action_idx, :2]
-            xf[0] = max(xf[0], 0.3+(action_idx%2)*0.01)
-            xf[0] = min(xf[0], 0.7+(action_idx%2)*0.01)
-            xf[1] = max(xf[1], 0.3+(action_idx%2)*0.01)
-            xf[1] = min(xf[1], 0.7+(action_idx%2)*0.01)
+            #xf[0] = max(xf[0], 0.3+(action_idx%2)*0.01)
+            #xf[0] = min(xf[0], 0.7+(action_idx%2)*0.01)
+            #xf[1] = max(xf[1], 0.3+(action_idx%2)*0.01)
+            #xf[1] = min(xf[1], 0.7+(action_idx%2)*0.01)
             
             Vo = action_commands[action_idx, 2:4]
+            #Vo[0] = min(Vo[0], 5)
+            #Vo[1] = min(Vo[1], 5)
             action_idx += 1
             if action_idx == len(action_commands):
                 print("END OF ACTIONS")
@@ -364,7 +369,7 @@ def collect_data():
             #print(pwms)
             #print("------")
             #print(dts)
-            with open("new_data/mallet_data_random_supercap_feedback_39_MaxV.csv", "w", newline="") as f:
+            with open("new_data/mallet_data_occilation_supercap_feedback_MaxV.csv", "w", newline="") as f:
                 writer = csv.writer(f)
                 # Write header
                 writer.writerow(["x", "y", "Expected_x", "Expected_y", "Left_PWM", "Right_PWM", "dt"])

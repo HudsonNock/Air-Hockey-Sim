@@ -31,8 +31,7 @@ obs[-4:-1] = (-6.5e-06)/ap.pullyR * 1e4
 
 obs_flip = np.empty((obs_dim), dtype=np.float32)
 
-margin = 0.1
-margin_bottom = 0.1
+margin = 0.05
 
 mallet_r = 0.1011 / 2
 puck_r = 0.0629 / 2
@@ -472,7 +471,6 @@ def apply_symmetry(t_obs):
     obs_flip[29] = table_bounds[1] - obs_flip[29]
 
     return obs_flip
-    
 
 def system_loop(cam, load):
     """Optimized timing measurement with minimal overhead"""
@@ -675,7 +673,6 @@ def system_loop(cam, load):
     get_mallet(ser)
     #timer = time.perf_counter()
     
-    timer = time.perf_counter()
     left_hysteresis = False
     symmetry = False
     timer1 = time.perf_counter()
@@ -699,12 +696,12 @@ def system_loop(cam, load):
         obs[22:24] = vel
         
         if (obs[0] > table_bounds[0]/2) or ((obs[-1]==1) and (((np.linalg.norm(obs[:2] - obs[4*3:4*3+2]) / (5/120.0)) > 0.5) or ((np.linalg.norm(obs[:2] - obs[4*2:4*2+2]) / (2/120.0)) > 0.5) or ((np.linalg.norm(obs[:2] - obs[4*1:4*1+2]) / (1/120.0)) > 0.5) or ((np.linalg.norm(obs[:2] - obs[4*4:4*4+2]) / (11/120.0)) > 0.5))):
-            if obs[-1] == 0:
-                print("defend")
+            #if obs[-1] == 0:
+            #    print("defend")
             obs[-1] = 1.0
         else:
-            if obs[-1] == 1.0:
-                print("attack")
+            #if obs[-1] == 1.0:
+            #    print("attack")
             obs[-1] = 0.0
         
         if left_hysteresis and obs[0] > table_bounds[0]/2 + 0.1:
@@ -730,22 +727,30 @@ def system_loop(cam, load):
         #print(action)
 
         if not no_update:
-            obs[28:30] = action[:2]
+            #obs[28:30] = action[:2]
             #print('--')
             #print(obs)
             #print(action)
             xf = action[:2]
 
-            xf[0] = np.maximum(margin_bottom+mallet_r, xf[0])
-            xf[0] = np.minimum(table_bounds[0]/2-mallet_r, xf[0])
+            xf[0] = np.maximum(margin+mallet_r, xf[0])
+            xf[0] = np.minimum(table_bounds[0]/2-mallet_r-margin, xf[0])
 
             xf[1] = np.maximum(margin+mallet_r, xf[1])
             xf[1] = np.minimum(table_bounds[1]-margin-mallet_r, xf[1])
+            
+            if ((xf[0] < (mallet_r + 2*puck_r + 0.01)) & (obs[0] < obs[20])):
+                xf[0] = mallet_r + 2*puck_r + 0.01
+            if ((xf[1] < (mallet_r + 2*puck_r + 0.01)) & (obs[1] < obs[21])):
+                xf[1] = mallet_r + 2*puck_r + 0.01
+            elif ((xf[1] > (table_bounds[1] - mallet_r - 2*puck_r - 0.01)) & (obs[1] > obs[21])):
+                xf[1] = table_bounds[1] - mallet_r - 2*puck_r - 0.01
 
             Vo = action[2] * Vmax * np.array([1+action[3],1-action[3]])
             
-            Vo[0] = np.minimum(Vo[0], 9)
-            Vo[1] = np.minimum(Vo[1], 9)
+            #Vo[0] = np.minimum(Vo[0], 5)
+            #Vo[1] = np.minimum(Vo[1], 5)
+            obs[28:30] = xf
             obs[30:32] = Vo
             #print("A")
             #print(xf)
@@ -768,13 +773,6 @@ def system_loop(cam, load):
         img = image.GetData().reshape(img_shape)
         track.process_frame(img)
         image.Release()
-        
-        #get_mallet(ser)
-        #pos, vel, acc = get_init_conditions()
-            
-        #new_time = time.perf_counter()
-        #time_diff = new_time - timer
-        #timer = new_time
             
     
     cam.EndAcquisition()

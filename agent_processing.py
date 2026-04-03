@@ -29,6 +29,8 @@ mallet_r = 0.1011 / 2
 margin_bounds = 0.04
 mallet_bounds = np.array([[margin_bounds + mallet_r, table_bounds[0]/2  - mallet_r/2], [margin_bounds+mallet_r, table_bounds[1]-margin_bounds-mallet_r]])
 
+MAX_INT32 = np.iinfo(np.int32).max
+
 policy_net = nn.Sequential(
             nn.Linear(obs_dim, 512),
             nn.LayerNorm(512),
@@ -136,6 +138,39 @@ C4 = [0,0]
 Vf = [0,0]
 vt_1 = [0,0]
 vt_2 = [0,0]
+
+bounds = np.zeros((6,2,2)) #var, x/y, low/high
+#vt_1, vt_2, Vf, C2, C3, C4
+
+def calculate_bounds():
+    #vt_1, vt_2
+    bounds[:2, :, 0] = 0
+    bounds[:2, :, 1] = 100
+    #Vf
+    bounds[2, :, 0] = -50
+    bounds[2, :, 1] = 50
+
+    pos_bounds = np.array([[0, table_bounds[0]/2], [0, table_bounds[1]]])
+    max_vel = np.array([0.5*48*pullyR*CE[0][2], 0.5*48*pullyR*CE[1][2]])
+    max_acc = np.zeros((2))
+
+    for j in range(2):
+        max_acc[j] = 0.5*48*pullyR * (ab[j][0]**2 * (np.abs(CE[j][0]) + CE[j][2]*np.abs(C6[j]*A2CE[j][0]+C5[j]*A3CE[j][0])) + ab[j][1]**2 * (np.abs(CE[j][1]) + CE[j][2]*np.abs(C6[j]*A2CE[j][1]+C5[j]*A3CE[j][1])))
+
+    #C2
+    for j in range(2):
+        bounds[3,j,0] = -C5[j]*max_acc[j]-C6[j]*max_vel[j]+C7[j]*pos_bounds[j,0]
+        bounds[3,j,1] = C5[j]*max_acc[j]+C6[j]*max_vel[j]+C7[j]*pos_bounds[j,1]
+    
+    #C3
+    for j in range(2):
+        bounds[4,j, 0] = -C5[j]*max_vel[j]+C6[j]*pos_bounds[j,0]
+        bounds[4,j, 1] = C5[j]*max_vel[j]+C6[j]*pos_bounds[j,1]
+
+    #C4
+    for j in range(2):
+        bounds[5,j, 0] = C5[j]*pos_bounds[j,0]
+        bounds[5,j, 1] = C5[j]*pos_bounds[j,1]
 
 #A e^(at) + B e^(bt) + Ct + D
 def f(x, i, eat, ebt):
@@ -293,7 +328,15 @@ def get_IC(t):
         acc[i] = 0.5 * Vf[i] * pullyR * (f_t[2] - 2 * g_a1[2] + g_a2[2]) + C2[i] * A_acc[0] + C3[i] * A_acc[1] + C4[i] * A_acc[2]
 
     return np.array(pos), np.array(vel), np.array(acc)
-    
+
+def deq(q, xmin, xmax):
+    y = q.astype(np.float64)/MAX_INT32
+    return (y+1)/2 * (xmax - xmin) + xmin
+
+def enq(q, xmin, xmax):
+    y = 2*(q - xmin)/(xmax - xmin) - 1;
+    return np.int32(y*MAX_INT32)
+
 def update_path(x_0, x_p, x_pp, x_f, Vo):
     global C1
     global C2
@@ -440,12 +483,12 @@ def update_path(x_0, x_p, x_pp, x_f, Vo):
     vt_1 = solve_vt1(x_f)
     vt_1 = [vt_1[0][0], vt_1[1][0]]
     vt_2 = [2*vt_1[0] - x_f[0]*C7[0]/C1[0]+C2[0]/C1[0], 2*vt_1[1]-x_f[1]*C7[1]/C1[1]+C2[1]/C1[1]]
-    vt_2_int = [int(val*10000) for val in vt_2]
-    
-    vt_1_int = [int(val*10000) for val in vt_1]
+
+    vt_1_int = [enq(vt_1[0], bounds[0,0,0], bounds[0,0,1]), enq(vt_1[1], bounds[0,1,0], bounds[0,1,1])]
+    vt_2_int = [enq(vt_2[0], bounds[1,0,0], bounds[1,0,1]), enq(vt_2[1], bounds[1,1,0], bounds[1,1,1])]
 
     Vf = [2*C1[0]/pullyR, 2*C1[1]/pullyR]
-    Vf_int  = [int(val*10000) for val in Vf]
+    Vf_int = [enq(Vf[0], bounds[2,0,0], bounds[2,0,1]), enq(Vf[1], bounds[2,1,0], bounds[2,1,1])]
     
     #print("data")
     #print(x_0)
@@ -455,22 +498,33 @@ def update_path(x_0, x_p, x_pp, x_f, Vo):
     #print(np.array(vt_2)/10000.0)
     #print(np.array(Vf)/10000.0)
     
-    C2_int = [int(val*100000000) for val in C2]
-    C3_int = [int(val*100000000) for val in C3]
-    C4_int = [int(val*100000000) for val in C4]
+    C2_int = [enq(C2[0], bounds[3,0,0], bounds[3,0,1]), enq(C2[1], bounds[3,1,0], bounds[3,1,1])]
+    C3_int = [enq(C3[0], bounds[4,0,0], bounds[4,0,1]), enq(C3[1], bounds[4,1,0], bounds[4,1,1])]
+    C4_int = [enq(C4[0], bounds[5,0,0], bounds[5,0,1]), enq(C4[1], bounds[5,1,0], bounds[5,1,1])]
 
     checksum = vt_1_int[0] ^ vt_1_int[1] ^ vt_2_int[0] ^ vt_2_int[1] ^ Vf_int[0] ^ Vf_int[1] ^ C2_int[0] ^ C2_int[1] ^ C3_int[0] ^ C3_int[1] ^ C4_int[0] ^ C4_int[1]
     
     data = struct.pack('<iiiiiiiiiiiii',\
-                       np.int32(vt_1_int[0]), np.int32(vt_1_int[1]),\
-                       np.int32(vt_2_int[0]), np.int32(vt_2_int[1]),\
-                       np.int32(Vf_int[0]), np.int32(Vf_int[1]),\
-                       np.int32(C2_int[0]), np.int32(C2_int[1]),\
-                       np.int32(C3_int[0]), np.int32(C3_int[1]),\
-                       np.int32(C4_int[0]), np.int32(C4_int[1]),\
-                       np.int32(checksum))
+                       vt_1_int[0], vt_1_int[1],\
+                       vt_2_int[0], vt_2_int[1],\
+                       Vf_int[0], Vf_int[1],\
+                       C2_int[0], C2_int[1],\
+                       C3_int[0], C3_int[1],\
+                       C4_int[0], C4_int[1],\
+                       checksum)
                        
-    
+    vt_1[0] = deq(vt_1_int[0], bounds[0,0,0], bounds[0,0,1])
+    vt_1[1] = deq(vt_1_int[1], bounds[0,1,0], bounds[0,1,1])
+    vt_2[0] = deq(vt_2_int[0], bounds[1,0,0], bounds[1,0,1])
+    vt_2[1] = deq(vt_2_int[1], bounds[1,1,0], bounds[1,1,1])
+    Vf[0] = deq(Vf_int[0], bounds[2,0,0], bounds[2,0,1])
+    Vf[1] = deq(Vf_int[1], bounds[2,1,0], bounds[2,1,1])
+    C2[0] = deq(C2_int[0], bounds[3,0,0], bounds[3,0,1])
+    C2[1] = deq(C2_int[1], bounds[3,1,0], bounds[3,1,1])
+    C3[0] = deq(C3_int[0], bounds[4,0,0], bounds[4,0,1])
+    C3[1] = deq(C3_int[1], bounds[4,1,0], bounds[4,1,1])
+    C4[0] = deq(C4_int[0], bounds[5,0,0], bounds[5,0,1])
+    C4[1] = deq(C4_int[1], bounds[5,1,0], bounds[5,1,1])
     
     return data
 

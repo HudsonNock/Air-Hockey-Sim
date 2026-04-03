@@ -677,12 +677,18 @@ def system_loop(cam, load):
     left_hysteresis = False
     symmetry = False
     timer1 = time.perf_counter()
+    
+    puck_visable_buffer = deque([False] * 30, maxlen=30)
+    center = False
+    
     while True:
     
         image = cam.GetNextImage()
         img = image.GetData().reshape(img_shape)
-        track.process_frame(img)
+        _, visable = track.process_frame(img)
         image.Release()
+        
+        puck_visable_buffer.append(not visable)
         
         get_mallet(ser)
         pos, vel, acc = get_init_conditions()
@@ -726,8 +732,28 @@ def system_loop(cam, load):
         
         no_update = action[-1] > np.random.random()
         #print(action)
+        
+        if np.all(puck_visable_buffer):
+            if not center:
+                no_update = False
+                action[:4] = np.array([table_bounds[0]/4, table_bounds[1]/2, 0.26, 0.0])
+                center = True
+                
+                xf = action[:2]
+                Vo = action[2] * Vmax * np.array([1+action[3],1-action[3]])
+                obs[28:30] = xf
+                obs[30:32] = Vo
+                
+                time_passed = time.perf_counter() - timer1
+                timer1 = time.perf_counter()
+                pos, vel, acc = ap.get_IC(time_passed)
 
-        if not no_update:
+                data = ap.update_path(pos, vel, acc, xf, Vo)
+                ser.write(b'\n' + data + b'\n')
+        else:
+            center = False
+
+        if (not no_update) and (not center):
             #obs[28:30] = action[:2]
             #print('--')
             #print(obs)
@@ -772,8 +798,10 @@ def system_loop(cam, load):
         
         image = cam.GetNextImage()
         img = image.GetData().reshape(img_shape)
-        track.process_frame(img)
+        _, visable = track.process_frame(img)
         image.Release()
+        
+        puck_visable_buffer.append(not visable)
             
     
     cam.EndAcquisition()

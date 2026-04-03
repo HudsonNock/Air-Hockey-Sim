@@ -217,6 +217,7 @@ def collect_data():
     print(f"Pulley radius measured as: {pully_R}")
     ap.pullyR = pully_R
     ap.C1 = [ap.Vmax * ap.pullyR / 2, ap.Vmax * ap.pullyR / 2]
+    ap.calculate_bounds()
     
     ser.reset_input_buffer()
     
@@ -369,7 +370,7 @@ def collect_data():
             #print(pwms)
             #print("------")
             #print(dts)
-            with open("new_data/mallet_data_occilation_supercap_feedback_MaxV.csv", "w", newline="") as f:
+            with open("new_data/mallet_data_occilation_NoMotor_MaxV.csv", "w", newline="") as f:
                 writer = csv.writer(f)
                 # Write header
                 writer.writerow(["x", "y", "Expected_x", "Expected_y", "Left_PWM", "Right_PWM", "dt"])

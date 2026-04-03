@@ -17,6 +17,8 @@ import queue
 import cv2
 import struct
 
+obs_dim = 39
+action_dim = 5
 height = 2.362
 width = 1.144
 
@@ -24,23 +26,19 @@ Vmax = 24 * 0.8
 table_bounds = np.array([height, width])
 
 mallet_r = 0.1011 / 2
-margin_bounds = 0.05
+margin_bounds = 0.03
 mallet_bounds = np.array([[margin_bounds + mallet_r, table_bounds[0]/2  - mallet_r/2], [margin_bounds+mallet_r, table_bounds[1]-margin_bounds-mallet_r]])
 
+MAX_INT32 = np.iinfo(np.int32).max
 
 pullyR = 0.035755
-#a1 = 1.325e-05
-#a2 = 9.470e-03
-#a3 = 6.178e-02
-#b1 = -5.104e-06
-#b2 = -4.303e-03
-#b3 = 2.814e-03
-a1 = 1.3250000000e-05;
-a2 = 8.7350000000e-03;
-a3 = 6.1780000000e-02;
-b1 = -5.1040000000e-06;
-b2 = -3.5680000000e-03;
-b3 = 2.8140000000e-03;
+
+a1 = 1.3250000000e-05
+a2 = 8.7350000000e-03
+a3 = 6.1780000000e-02
+b1 = -5.1040000000e-06
+b2 = -3.5680000000e-03
+b3 = 2.8140000000e-03
 
 C1 = [Vmax * pullyR / 2, Vmax * pullyR / 2]
 C5 = [a1-b1, a1+b1]
@@ -90,6 +88,39 @@ C4 = [0,0]
 Vf = [0,0]
 vt_1 = [0,0]
 vt_2 = [0,0]
+
+bounds = np.zeros((6,2,2)) #var, x/y, low/high
+#vt_1, vt_2, Vf, C2, C3, C4
+
+def calculate_bounds():
+    #vt_1, vt_2
+    bounds[:2, :, 0] = -0.0001
+    bounds[:2, :, 1] = 100
+    #Vf
+    bounds[2, :, 0] = -50
+    bounds[2, :, 1] = 50
+
+    pos_bounds = np.array([[0, table_bounds[0]/2], [0, table_bounds[1]]])
+    max_vel = np.array([0.5*48*pullyR*CE[0][2], 0.5*48*pullyR*CE[1][2]])
+    max_acc = np.zeros((2))
+
+    for j in range(2):
+        max_acc[j] = 0.5*48*pullyR * (ab[j][0]**2 * (np.abs(CE[j][0]) + CE[j][2]*np.abs(C6[j]*A2CE[j][0]+C5[j]*A3CE[j][0])) + ab[j][1]**2 * (np.abs(CE[j][1]) + CE[j][2]*np.abs(C6[j]*A2CE[j][1]+C5[j]*A3CE[j][1])))
+
+    #C2
+    for j in range(2):
+        bounds[3,j,0] = -C5[j]*max_acc[j]-C6[j]*max_vel[j]+C7[j]*pos_bounds[j,0]
+        bounds[3,j,1] = C5[j]*max_acc[j]+C6[j]*max_vel[j]+C7[j]*pos_bounds[j,1]
+    
+    #C3
+    for j in range(2):
+        bounds[4,j, 0] = -C5[j]*max_vel[j]+C6[j]*pos_bounds[j,0]
+        bounds[4,j, 1] = C5[j]*max_vel[j]+C6[j]*pos_bounds[j,1]
+
+    #C4
+    for j in range(2):
+        bounds[5,j, 0] = C5[j]*pos_bounds[j,0]
+        bounds[5,j, 1] = C5[j]*pos_bounds[j,1]
 
 #A e^(at) + B e^(bt) + Ct + D
 def f(x, i, eat, ebt):
@@ -248,7 +279,24 @@ def get_IC(t):
 
     return np.array(pos), np.array(vel), np.array(acc)
     
+def deq(q):
+    y = q.astype(np.float64) / MAX_INT32
     
+    xmin = bounds[:,:,0]
+    xmax = bounds[:,:,1]
+    
+    return (y+1) / 2 * (xmax - xmin) + xmin
+
+def enq(q):
+    xmin = bounds[:,:,0]
+    xmax = bounds[:,:,1]
+    
+    if np.any((q < xmin) | (q > xmax)):
+        raise ValueError("Value to encode out of bounds")
+    
+    y = 2 * (q - xmin) / (xmax - xmin) - 1
+    
+    return (y * MAX_INT32).astype(np.int32)
 
 def update_path(x_0, x_p, x_pp, x_f, Vo):
     global C1
@@ -394,37 +442,29 @@ def update_path(x_0, x_p, x_pp, x_f, Vo):
                 pass
 
     vt_1 = solve_vt1(x_f)
-    vt_1 = [vt_1[0][0], vt_1[1][0]]
-    vt_2 = [2*vt_1[0] - x_f[0]*C7[0]/C1[0]+C2[0]/C1[0], 2*vt_1[1]-x_f[1]*C7[1]/C1[1]+C2[1]/C1[1]]
-    vt_2_int = [int(val*10000) for val in vt_2]
-    
-    vt_1_int = [int(val*10000) for val in vt_1]
+    vt_1 = [max(vt_1[0][0], 0), max(vt_1[1][0], 0)]
+    vt_2 = [max(2*vt_1[0] - x_f[0]*C7[0]/C1[0]+C2[0]/C1[0], 0), max(2*vt_1[1]-x_f[1]*C7[1]/C1[1]+C2[1]/C1[1], 0)]
 
     Vf = [2*C1[0]/pullyR, 2*C1[1]/pullyR]
-    Vf_int  = [int(val*10000) for val in Vf]
     
-    #print("data")
-    #print(x_0)
-    #print(x_p)
-    #print(x_pp)
-    #print(np.array(vt_1)/10000.0)
-    #print(np.array(vt_2)/10000.0)
-    #print(np.array(Vf)/10000.0)
+    vals_stacked = np.array([vt_1, vt_2, Vf, C2, C3, C4])
+    ints_results = enq(vals_stacked)
+    vt_1_int, vt_2_int, Vf_int, C2_int, C3_int, C4_int = ints_results
     
-    C2_int = [int(val*100000000) for val in C2]
-    C3_int = [int(val*100000000) for val in C3]
-    C4_int = [int(val*100000000) for val in C4]
-
     checksum = vt_1_int[0] ^ vt_1_int[1] ^ vt_2_int[0] ^ vt_2_int[1] ^ Vf_int[0] ^ Vf_int[1] ^ C2_int[0] ^ C2_int[1] ^ C3_int[0] ^ C3_int[1] ^ C4_int[0] ^ C4_int[1]
     
     data = struct.pack('<iiiiiiiiiiiii',\
-                       np.int32(vt_1_int[0]), np.int32(vt_1_int[1]),\
-                       np.int32(vt_2_int[0]), np.int32(vt_2_int[1]),\
-                       np.int32(Vf_int[0]), np.int32(Vf_int[1]),\
-                       np.int32(C2_int[0]), np.int32(C2_int[1]),\
-                       np.int32(C3_int[0]), np.int32(C3_int[1]),\
-                       np.int32(C4_int[0]), np.int32(C4_int[1]),\
-                       np.int32(checksum))
+                       vt_1_int[0], vt_1_int[1],\
+                       vt_2_int[0], vt_2_int[1],\
+                       Vf_int[0], Vf_int[1],\
+                       C2_int[0], C2_int[1],\
+                       C3_int[0], C3_int[1],\
+                       C4_int[0], C4_int[1],\
+                       checksum)
+                       
+    ints_stacked = np.array([vt_1_int, vt_2_int, Vf_int, C2_int, C3_int, C4_int])
+    results = deq(ints_stacked)
+    vt_1, vt_2, Vf, C2, C3, C4 = results
     
     return data
 

@@ -26,7 +26,7 @@ Vmax = 24 * 0.8
 table_bounds = np.array([height, width])
 
 mallet_r = 0.1011 / 2
-margin_bounds = 0.04
+margin_bounds = 0.03
 mallet_bounds = np.array([[margin_bounds + mallet_r, table_bounds[0]/2  - mallet_r/2], [margin_bounds+mallet_r, table_bounds[1]-margin_bounds-mallet_r]])
 
 MAX_INT32 = np.iinfo(np.int32).max
@@ -83,12 +83,12 @@ pullyR = 0.035755
 #b3 = 6.535e-03 
 
 
-a1 = 1.3250000000e-05;
-a2 = 8.7350000000e-03;
-a3 = 6.1780000000e-02;
-b1 = -5.1040000000e-06;
-b2 = -3.5680000000e-03;
-b3 = 2.8140000000e-03;
+a1 = 1.3250000000e-05
+a2 = 8.7350000000e-03
+a3 = 6.1780000000e-02
+b1 = -5.1040000000e-06
+b2 = -3.5680000000e-03
+b3 = 2.8140000000e-03
 
 C1 = [Vmax * pullyR / 2, Vmax * pullyR / 2]
 C5 = [a1-b1, a1+b1]
@@ -144,7 +144,7 @@ bounds = np.zeros((6,2,2)) #var, x/y, low/high
 
 def calculate_bounds():
     #vt_1, vt_2
-    bounds[:2, :, 0] = 0
+    bounds[:2, :, 0] = -0.0001
     bounds[:2, :, 1] = 100
     #Vf
     bounds[2, :, 0] = -50
@@ -329,13 +329,24 @@ def get_IC(t):
 
     return np.array(pos), np.array(vel), np.array(acc)
 
-def deq(q, xmin, xmax):
-    y = q.astype(np.float64)/MAX_INT32
-    return (y+1)/2 * (xmax - xmin) + xmin
+def deq(q):
+    y = q.astype(np.float64) / MAX_INT32
+    
+    xmin = bounds[:,:,0]
+    xmax = bounds[:,:,1]
+    
+    return (y+1) / 2 * (xmax - xmin) + xmin
 
-def enq(q, xmin, xmax):
-    y = 2*(q - xmin)/(xmax - xmin) - 1;
-    return np.int32(y*MAX_INT32)
+def enq(q):
+    xmin = bounds[:,:,0]
+    xmax = bounds[:,:,1]
+    
+    if np.any((q < xmin) | (q > xmax)):
+        raise ValueError("Value to encode out of bounds")
+    
+    y = 2 * (q - xmin) / (xmax - xmin) - 1
+    
+    return (y * MAX_INT32).astype(np.int32)
 
 def update_path(x_0, x_p, x_pp, x_f, Vo):
     global C1
@@ -481,27 +492,15 @@ def update_path(x_0, x_p, x_pp, x_f, Vo):
                 pass
 
     vt_1 = solve_vt1(x_f)
-    vt_1 = [vt_1[0][0], vt_1[1][0]]
-    vt_2 = [2*vt_1[0] - x_f[0]*C7[0]/C1[0]+C2[0]/C1[0], 2*vt_1[1]-x_f[1]*C7[1]/C1[1]+C2[1]/C1[1]]
-
-    vt_1_int = [enq(vt_1[0], bounds[0,0,0], bounds[0,0,1]), enq(vt_1[1], bounds[0,1,0], bounds[0,1,1])]
-    vt_2_int = [enq(vt_2[0], bounds[1,0,0], bounds[1,0,1]), enq(vt_2[1], bounds[1,1,0], bounds[1,1,1])]
+    vt_1 = [max(vt_1[0][0], 0), max(vt_1[1][0], 0)]
+    vt_2 = [max(2*vt_1[0] - x_f[0]*C7[0]/C1[0]+C2[0]/C1[0], 0), max(2*vt_1[1]-x_f[1]*C7[1]/C1[1]+C2[1]/C1[1], 0)]
 
     Vf = [2*C1[0]/pullyR, 2*C1[1]/pullyR]
-    Vf_int = [enq(Vf[0], bounds[2,0,0], bounds[2,0,1]), enq(Vf[1], bounds[2,1,0], bounds[2,1,1])]
     
-    #print("data")
-    #print(x_0)
-    #print(x_p)
-    #print(x_pp)
-    #print(np.array(vt_1)/10000.0)
-    #print(np.array(vt_2)/10000.0)
-    #print(np.array(Vf)/10000.0)
+    vals_stacked = np.array([vt_1, vt_2, Vf, C2, C3, C4])
+    ints_results = enq(vals_stacked)
+    vt_1_int, vt_2_int, Vf_int, C2_int, C3_int, C4_int = ints_results
     
-    C2_int = [enq(C2[0], bounds[3,0,0], bounds[3,0,1]), enq(C2[1], bounds[3,1,0], bounds[3,1,1])]
-    C3_int = [enq(C3[0], bounds[4,0,0], bounds[4,0,1]), enq(C3[1], bounds[4,1,0], bounds[4,1,1])]
-    C4_int = [enq(C4[0], bounds[5,0,0], bounds[5,0,1]), enq(C4[1], bounds[5,1,0], bounds[5,1,1])]
-
     checksum = vt_1_int[0] ^ vt_1_int[1] ^ vt_2_int[0] ^ vt_2_int[1] ^ Vf_int[0] ^ Vf_int[1] ^ C2_int[0] ^ C2_int[1] ^ C3_int[0] ^ C3_int[1] ^ C4_int[0] ^ C4_int[1]
     
     data = struct.pack('<iiiiiiiiiiiii',\
@@ -513,18 +512,9 @@ def update_path(x_0, x_p, x_pp, x_f, Vo):
                        C4_int[0], C4_int[1],\
                        checksum)
                        
-    vt_1[0] = deq(vt_1_int[0], bounds[0,0,0], bounds[0,0,1])
-    vt_1[1] = deq(vt_1_int[1], bounds[0,1,0], bounds[0,1,1])
-    vt_2[0] = deq(vt_2_int[0], bounds[1,0,0], bounds[1,0,1])
-    vt_2[1] = deq(vt_2_int[1], bounds[1,1,0], bounds[1,1,1])
-    Vf[0] = deq(Vf_int[0], bounds[2,0,0], bounds[2,0,1])
-    Vf[1] = deq(Vf_int[1], bounds[2,1,0], bounds[2,1,1])
-    C2[0] = deq(C2_int[0], bounds[3,0,0], bounds[3,0,1])
-    C2[1] = deq(C2_int[1], bounds[3,1,0], bounds[3,1,1])
-    C3[0] = deq(C3_int[0], bounds[4,0,0], bounds[4,0,1])
-    C3[1] = deq(C3_int[1], bounds[4,1,0], bounds[4,1,1])
-    C4[0] = deq(C4_int[0], bounds[5,0,0], bounds[5,0,1])
-    C4[1] = deq(C4_int[1], bounds[5,1,0], bounds[5,1,1])
+    ints_stacked = np.array([vt_1_int, vt_2_int, Vf_int, C2_int, C3_int, C4_int])
+    results = deq(ints_stacked)
+    vt_1, vt_2, Vf, C2, C3, C4 = results
     
     return data
 

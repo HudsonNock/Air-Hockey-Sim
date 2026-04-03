@@ -183,7 +183,7 @@ def collect_data():
     #np.array([3, 3]), np.array([0.2])), axis=0))
     action_commands = np.array(action_commands)
     """
-    """
+    
     action_commands = []
     action_commands.append(np.array([0.3, 0.3, 5, 5, 1.0]))
     for i in range(1,7):
@@ -193,6 +193,7 @@ def collect_data():
         for j in range(3):
             action_commands.append(np.array([0.31, 0.51, 5, 5*i, 0.2]))
             action_commands.append(np.array([0.3, 0.3, 5, 5*i, 0.2]))
+    
     """
     action_commands = []
     action_commands.append(np.array([0.3, table_bounds[1]/2, 5, 5, 1.0]))
@@ -206,7 +207,7 @@ def collect_data():
                 action_commands.append(np.array([0.3, table_bounds[1]/2, 4*i+2, 4*i+2, 0.2]))
             else:
                 action_commands.append(np.array([0.3, table_bounds[1]/2, 4*i+2, 4*i+2, 0.4]))
-
+    """
     action_commands = np.array(action_commands)
     
     PORT = '/dev/ttyUSB0'  # Adjust this to COM port or /dev/ttyUSBx
@@ -394,7 +395,7 @@ def collect_data():
             #print(pwms)
             #print("------")
             #print(dts)
-            with open("new_data/mallet_data_Belt_Vibrations_NoMotor.csv", "w", newline="") as f:
+            with open("new_data/mallet_data_XYPath_NoMotor.csv", "w", newline="") as f:
                 writer = csv.writer(f)
                 # Write header
                 writer.writerow(["x", "y", "Expected_x", "Expected_y", "Left_PWM", "Right_PWM", "dt"])

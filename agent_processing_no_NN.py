@@ -180,6 +180,10 @@ def solve_vt1(x_f):
     if x0 == 0:
         ax = [0]
     else:
+        a2x0 = (2*x0 - x_f[0]*C7[0]/C1[0]+C2[0]/C1[0])
+        while (a2x0 < x0):
+            x0 *= 1.1
+            a2x0 = (2*x0 - x_f[0]*C7[0]/C1[0]+C2[0]/C1[0])
         ax, info, ier, msg = fsolve(ax_error, x0, xtol=1e-4, full_output=True, args=(x_f))
         if ier != 1 and abs(ax_error(ax, x_f)) > 1e-4:
             for n in range(2,11):
@@ -194,6 +198,10 @@ def solve_vt1(x_f):
     if x0 == 0:
         ay = [0]
     else:
+        a2y0 = (2*x0 - x_f[1]*C7[1]/C1[1]+C2[1]/C1[1])
+        while (a2y0 < x0):
+            x0 *= 1.1
+            a2y0 = (2*x0 - x_f[1]*C7[1]/C1[1]+C2[1]/C1[1])
         ay, info, ier, msg = fsolve(ay_error, x0, xtol=1e-4, full_output = True, args=(x_f)) #2*(abs(x_f[1]-x_0[1]))/math.sqrt(abs(C1[1]*2/R)), xtol=1e-4)
         if ier != 1 and abs(ay_error(ay, x_f)) > 1e-4:
             for n in range(2,11):

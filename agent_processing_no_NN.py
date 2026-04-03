@@ -442,8 +442,10 @@ def update_path(x_0, x_p, x_pp, x_f, Vo):
                 pass
 
     vt_1 = solve_vt1(x_f)
-    vt_1 = [np.clip(vt_1[0][0], 0, 99.5), np.clip(vt_1[1][0], 0, 99.5)]
-    vt_2 = [np.clip(2*vt_1[0] - x_f[0]*C7[0]/C1[0]+C2[0]/C1[0], 0, 99.5), np.clip(2*vt_1[1]-x_f[1]*C7[1]/C1[1]+C2[1]/C1[1], 0, 99.5)]
+    vt_1 = [vt_1[0][0], vt_1[1][0]]
+    vt_2 = [2*vt_1[0] - x_f[0]*C7[0]/C1[0]+C2[0]/C1[0], 2*vt_1[1]-x_f[1]*C7[1]/C1[1]+C2[1]/C1[1]]
+    vt_1 = [np.clip(vt_1[0], 0, 99.5), np.clip(vt_1[1], 0, 99.5)]
+    vt_2 = [np.clip(vt_2[0], 0, 99.5), np.clip(vt_2[1], 0, 99.5)]
 
     Vf = [2*C1[0]/pullyR, 2*C1[1]/pullyR]
     

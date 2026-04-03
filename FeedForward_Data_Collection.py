@@ -156,7 +156,7 @@ def collect_data():
     # Disable garbage collection during measurement
     #try:
     
-    action_commands = np.load('new_data/occilation_actions_np.npy')[-400:]
+    #action_commands = np.load('new_data/occilation_actions_np.npy')[-400:]
     """
     for idx in range(6):
         if idx%4 == 0:
@@ -183,7 +183,18 @@ def collect_data():
     #np.array([3, 3]), np.array([0.2])), axis=0))
     action_commands = np.array(action_commands)
     """
+    
+    action_commands = []
+    action_commands.append(np.array([0.3, 0.3, 5, 5, 1.0]))
+    for i in range(1,7):
+        for j in range(3):
+            action_commands.append(np.array([0.51, 0.31, 5*i, 5, 0.2]))
+            action_commands.append(np.array([0.3, 0.3, 5*i, 5, 0.2]))
+        for j in range(3):
+            action_commands.append(np.array([0.31, 0.51, 5, 5*i, 0.2]))
+            action_commands.append(np.array([0.3, 0.3, 5, 5*i, 0.2]))
 
+    action_commands = np.array(action_commands)
     
     PORT = '/dev/ttyUSB0'  # Adjust this to COM port or /dev/ttyUSBx
     BAUD = 460800
@@ -370,7 +381,7 @@ def collect_data():
             #print(pwms)
             #print("------")
             #print(dts)
-            with open("new_data/mallet_data_occilation_NoMotor2_MaxV.csv", "w", newline="") as f:
+            with open("new_data/mallet_data_occilation_supercap_feedback_XYPath.csv", "w", newline="") as f:
                 writer = csv.writer(f)
                 # Write header
                 writer.writerow(["x", "y", "Expected_x", "Expected_y", "Left_PWM", "Right_PWM", "dt"])

@@ -172,12 +172,14 @@ def collect_data():
     """
     
     action_commands = []
-    for idx in range(250):
+    for idx in range(50):
         V_theta = np.random.random() * 2 - 1
         V_M = np.random.random()
         Vo = V_M * Vmax * np.array([1+V_theta,1-V_theta])
         Vo[0] = max(Vo[0], 0.1)
         Vo[1] = max(Vo[1], 0.1)
+        
+        Vo = np.array([(10-3)*np.random.random() + 3.0, (10-3)*np.random.random() + 3.0])
         xf = np.array([0.3+np.random.random()*(0.85-0.3), 0.3+np.random.random()*(0.85-0.3)])
         action_commands.append(np.concatenate((xf, Vo, np.array([(0.18-0.02)*np.random.random() + 0.02])), axis=0))
         
@@ -401,7 +403,7 @@ def collect_data():
             #print(pwms)
             #print("------")
             #print(dts)
-            with open("new_data/mallet_data_supercap_random_MaxV_Fx_Truepos.csv", "w", newline="") as f:
+            with open("new_data/mallet_data_random_supercap_10V_40.csv", "w", newline="") as f:
                 writer = csv.writer(f)
                 # Write header
                 writer.writerow(["x", "y", "Expected_x", "Expected_y", "Left_PWM", "Right_PWM", "dt"])

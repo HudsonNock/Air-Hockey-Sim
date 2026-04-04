@@ -19,6 +19,7 @@ import torch
 import agent_processing as ap
 import argparse
 import csv
+from collections import deque
 
 torch.set_num_threads(2)
 torch.set_num_interop_threads(1)
@@ -431,7 +432,7 @@ def get_mallet(ser):
             print(stored_buffer)
             print(1/0)
         else:
-            entry = np.array([deq(p0, -1, 2), deq(p1, -1, 2), deq(dt1, 0, 3) / 1000.0])
+            entry = np.array([deq(p0, -0.5, 2), deq(p1, -0.5, 2), deq(dt1, 0, 3) / 1000.0])
             mallet_buffer.add(entry)
         
         if frame_end+1 < len(stored_buffer):
@@ -471,16 +472,16 @@ def apply_symmetry(t_obs):
 
     return obs_flip
     
-def save_data(data):
-    with open("new_data/system_loop_data.csv", "w", newline="") as f:
-	            writer = csv.writer(f)
-	            # Write header
-	            writer.writerow(["Px", "Py", "Mx", "My", "Mxv", "Myv", "dt"])
-	            
-	            # Write rows
-	            for i in range(len(recording_data)):
-	                writer.writerow([recording_data[i, 0], recording_data[i, 1], recording_data[i, 2], recording_data[i, 3], recording_data[i, 4], recording_data[i,5], recording_data[i,6]])
-	        print("SIGNAL END")   
+def save_data(recording_data):
+    with open("new_data/system_loop_data_MaxV_3.csv", "w", newline="") as f:
+        writer = csv.writer(f)
+        # Write header
+        writer.writerow(["Px", "Py", "Mx", "My", "Mxv", "Myv", "dt"])
+        
+        # Write rows
+        for i in range(len(recording_data)):
+            writer.writerow([recording_data[i, 0], recording_data[i, 1], recording_data[i, 2], recording_data[i, 3], recording_data[i, 4], recording_data[i,5], recording_data[i,6]])
+        print("SIGNAL END")   
 
 def system_loop(cam, load):
     """Optimized timing measurement with minimal overhead"""
@@ -682,21 +683,26 @@ def system_loop(cam, load):
         pass
 
     get_mallet(ser)
+
+    recording_data = np.zeros([20000, 7])
     timer = time.perf_counter()
-    recording_data = np.zeros([6000, 7])
     
-    timer = time.perf_counter()
     left_hysteresis = False
     symmetry = False
     timer1 = time.perf_counter()
+    
+    puck_hidden_buffer = deque([False]*30, maxlen=30)
+    center = False
     
     idx = 0
     while True:
     
         image = cam.GetNextImage()
         img = image.GetData().reshape(img_shape)
-        track.process_frame(img)
+        _, visable = track.process_frame(img)
         image.Release()
+        
+        puck_hidden_buffer.append(not visable)
         
         get_mallet(ser)
         pos, vel, acc = get_init_conditions()
@@ -751,8 +757,28 @@ def system_loop(cam, load):
         
         no_update = action[-1] > np.random.random()
         #print(action)
+        
+        if np.all(puck_hidden_buffer):
+            if not center:
+                no_update = False
+                action[:4] = np.array([table_bounds[0]/4, table_bounds[1]/2, 0.26, 0.0])
+                center = True
+                
+                xf = action[:2]
+                Vo = action[2] * Vmax * np.array([1+action[3],1-action[3]])
+                obs[28:30] = xf
+                obs[30:32] = Vo
+                
+                time_passed = time.perf_counter() - timer1
+                timer1 = time.perf_counter()
+                pos, vel, acc = ap.get_IC(time_passed)
 
-        if not no_update:
+                data = ap.update_path(pos, vel, acc, xf, Vo)
+                ser.write(b'\n' + data + b'\n')
+        else:
+            center = False
+
+        if (not no_update) and (not center):
             #obs[28:30] = action[:2]
             #print('--')
             #print(obs)
@@ -797,8 +823,10 @@ def system_loop(cam, load):
         
         image = cam.GetNextImage()
         img = image.GetData().reshape(img_shape)
-        track.process_frame(img)
+        _, visable = track.process_frame(img)
         image.Release()
+        
+        puck_hidden_buffer.append(not visable)
         
         get_mallet(ser)
         pos, vel, acc = get_init_conditions()

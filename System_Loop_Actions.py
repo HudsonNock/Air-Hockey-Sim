@@ -432,7 +432,7 @@ def get_mallet(ser):
             print(stored_buffer)
             print(1/0)
         else:
-            entry = np.array([deq(p0, -1, 2), deq(p1, -1, 2), deq(dt1, 0, 3) / 1000.0])
+            entry = np.array([deq(p0, -0.5, 2), deq(p1, -0.5, 2), deq(dt1, 0, 3) / 1000.0])
             mallet_buffer.add(entry)
         
         if frame_end+1 < len(stored_buffer):

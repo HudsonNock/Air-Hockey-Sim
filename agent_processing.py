@@ -230,6 +230,10 @@ def solve_vt1(x_f):
     if x0 == 0:
         ax = [0]
     else:
+        a2x0 = (2*x0 - x_f[0]*C7[0]/C1[0]+C2[0]/C1[0])
+        while (a2x0 < x0):
+            x0 *= 1.1
+            a2x0 = (2*x0 - x_f[0]*C7[0]/C1[0]+C2[0]/C1[0])
         ax, info, ier, msg = fsolve(ax_error, x0, xtol=1e-4, full_output=True, args=(x_f))
         if ier != 1 and abs(ax_error(ax, x_f)) > 1e-4:
             for n in range(2,11):
@@ -244,6 +248,10 @@ def solve_vt1(x_f):
     if x0 == 0:
         ay = [0]
     else:
+        a2y0 = (2*x0 - x_f[1]*C7[1]/C1[1]+C2[1]/C1[1])
+        while (a2y0 < x0):
+            x0 *= 1.1
+            a2y0 = (2*x0 - x_f[1]*C7[1]/C1[1]+C2[1]/C1[1])
         ay, info, ier, msg = fsolve(ay_error, x0, xtol=1e-4, full_output = True, args=(x_f)) #2*(abs(x_f[1]-x_0[1]))/math.sqrt(abs(C1[1]*2/R)), xtol=1e-4)
         if ier != 1 and abs(ay_error(ay, x_f)) > 1e-4:
             for n in range(2,11):
@@ -492,8 +500,10 @@ def update_path(x_0, x_p, x_pp, x_f, Vo):
                 pass
 
     vt_1 = solve_vt1(x_f)
-    vt_1 = [np.clip(vt_1[0][0], 0, 99.5), np.clip(vt_1[1][0], 0, 99.5)]
-    vt_2 = [np.clip(2*vt_1[0] - x_f[0]*C7[0]/C1[0]+C2[0]/C1[0], 0, 99.5), np.clip(2*vt_1[1]-x_f[1]*C7[1]/C1[1]+C2[1]/C1[1], 0, 99.5)]
+    vt_1 = [vt_1[0][0], vt_1[1][0]]
+    vt_2 = [2*vt_1[0] - x_f[0]*C7[0]/C1[0]+C2[0]/C1[0], 2*vt_1[1]-x_f[1]*C7[1]/C1[1]+C2[1]/C1[1]]
+    vt_1 = [np.clip(vt_1[0], 0, 99.5), np.clip(vt_1[1], 0, 99.5)]
+    vt_2 = [np.clip(vt_2[0], 0, 99.5), np.clip(vt_2[1], 0, 99.5)]
 
     Vf = [2*C1[0]/pullyR, 2*C1[1]/pullyR]
     

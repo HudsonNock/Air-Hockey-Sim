@@ -19,6 +19,7 @@ import torch
 import agent_processing as ap
 import argparse
 import csv
+from collections import deque
 
 torch.set_num_threads(2)
 torch.set_num_interop_threads(1)
@@ -432,7 +433,7 @@ def get_mallet(ser):
             print(stored_buffer)
             print(1/0)
         else:
-            entry = np.array([deq(p0, -1, 2), deq(p1, -1, 2), deq(dt1, 0, 3) / 1000.0])
+            entry = np.array([deq(p0, -0.5, 2), deq(p1, -0.5, 2), deq(dt1, 0, 3) / 1000.0])
             mallet_buffer.add(entry)
         
         if frame_end+1 < len(stored_buffer):
@@ -678,7 +679,7 @@ def system_loop(cam, load):
     symmetry = False
     timer1 = time.perf_counter()
     
-    puck_visable_buffer = deque([False] * 30, maxlen=30)
+    puck_hidden_buffer = deque([False] * 30, maxlen=30)
     center = False
     
     while True:
@@ -688,7 +689,7 @@ def system_loop(cam, load):
         _, visable = track.process_frame(img)
         image.Release()
         
-        puck_visable_buffer.append(not visable)
+        puck_hidden_buffer.append(not visable)
         
         get_mallet(ser)
         pos, vel, acc = get_init_conditions()
@@ -733,7 +734,7 @@ def system_loop(cam, load):
         no_update = action[-1] > np.random.random()
         #print(action)
         
-        if np.all(puck_visable_buffer):
+        if np.all(puck_hidden_buffer):
             if not center:
                 no_update = False
                 action[:4] = np.array([table_bounds[0]/4, table_bounds[1]/2, 0.26, 0.0])
@@ -801,7 +802,7 @@ def system_loop(cam, load):
         _, visable = track.process_frame(img)
         image.Release()
         
-        puck_visable_buffer.append(not visable)
+        puck_hidden_buffer.append(not visable)
             
     
     cam.EndAcquisition()

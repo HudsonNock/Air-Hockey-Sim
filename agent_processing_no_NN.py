@@ -26,7 +26,7 @@ Vmax = 24 * 0.8
 table_bounds = np.array([height, width])
 
 mallet_r = 0.1011 / 2
-margin_bounds = 0.03
+margin_bounds = 0.1
 mallet_bounds = np.array([[margin_bounds + mallet_r, table_bounds[0]/2  - mallet_r/2], [margin_bounds+mallet_r, table_bounds[1]-margin_bounds-mallet_r]])
 
 MAX_INT32 = np.iinfo(np.int32).max

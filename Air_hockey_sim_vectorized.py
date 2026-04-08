@@ -33,9 +33,9 @@ red = (255, 0, 0)
 green = (0, 100, 0)
 blue = (0,0,255)
 
-#fourcc = cv2.VideoWriter_fourcc(*'MJPG')
-#out = cv2.VideoWriter("Model_play_new_env.avi", fourcc, 60.0, (screen_width, screen_height))
-#frame_count = 0
+fourcc = cv2.VideoWriter_fourcc(*'MJPG')
+out = cv2.VideoWriter("TableV2_Model200.avi", fourcc, 60.0, (screen_width, screen_height))
+frame_count = 0
 
 def initalize(envs, mallet_r=0.05, puck_r=0.05, goal_w=0.35, V_max=24, pully_radius=0.035306, ab_vars=None, puck_inits=None):
     global game_number 
@@ -66,8 +66,10 @@ def initalize(envs, mallet_r=0.05, puck_r=0.05, goal_w=0.35, V_max=24, pully_rad
     global sinks
     global res_model
     global mallet_res_model
+    global bounce_reward_multiplyer
 
     time = 0
+    bounce_reward_multiplyer = 1.0
 
     game_number = envs
     mallet_radius = mallet_r
@@ -114,9 +116,9 @@ def initalize(envs, mallet_r=0.05, puck_r=0.05, goal_w=0.35, V_max=24, pully_rad
     bounds_puck = np.array([[puck_radius, width - puck_radius], [puck_radius, height - puck_radius]])
     bounds_puck = np.tile(np.expand_dims(bounds_puck, axis=0), (game_number,1,1))
                     
-    drag = 0.0012273 + np.random.random((game_number,))*0.0004
-    friction = 0.00103794 + np.random.random((game_number,))*0.0004
-    mass = 0.00736196 + np.random.random((game_number,)) * 0.0008
+    drag = 0.007901 + np.random.random((game_number,))*0.0004
+    friction = 0.0003363 + np.random.random((game_number,))*0.00004
+    mass = 0.03692278 + np.random.random((game_number,)) * 0.001
 
     class HeteroscedasticNN(nn.Module):
         def __init__(self, input_dim=2, hidden_dim=10, output_dim=2):
@@ -1023,11 +1025,11 @@ def update_puck(t, mask, t_init, no_M = False, noM_pos = None, noM_vel = None, i
             x_mc = get_pos_mask(t_init[crossed_to_left]+root, CEm, A2CEm, A3CEm, A4CEm, abm, am, a2m, C1m, C2m, C3m, C4m)
 
             if indicies:
-                noM_pos, _, hitM = step_noM(1.0, center_pos, center_vel, mask[crossed_to_left], x_mc)
+                noM_pos, _, hitM, straight_shot = step_noM(1.0, center_pos, center_vel, mask[crossed_to_left], x_mc)
             else:
-                noM_pos, _, hitM = step_noM(1.0, center_pos, center_vel, np.where(mask)[0][crossed_to_left].astype(np.int32), x_mc)
+                noM_pos, _, hitM, straight_shot = step_noM(1.0, center_pos, center_vel, np.where(mask)[0][crossed_to_left].astype(np.int32), x_mc)
             entered_goal = noM_pos[:,0] < 0
-            cross_left[crossed_to_left] = np.where(entered_goal, np.where(hitM, 1, 2), 0)
+            cross_left[crossed_to_left] = np.where(entered_goal, np.where(hitM, np.where(straight_shot, 0.5, 0.5*bounce_reward_multiplyer), np.where(straight_shot, 2.3, 2.3*bounce_reward_multiplyer)), 0)
 
         times_scored = np.zeros_like(crossed_to_right, dtype=np.uint16)
 
@@ -1066,13 +1068,13 @@ def update_puck(t, mask, t_init, no_M = False, noM_pos = None, noM_vel = None, i
             x_mc = get_pos_mask(t_init[crossed_to_right]+root, CEm, A2CEm, A3CEm, A4CEm, abm, am, a2m, C1m, C2m, C3m, C4m)
 
             if indicies:
-                noM_pos, _, hitM = step_noM(1.0, center_pos, center_vel, mask[crossed_to_right], x_mc)
+                noM_pos, _, hitM, straight_shot = step_noM(1.0, center_pos, center_vel, mask[crossed_to_right], x_mc)
             else:
-                noM_pos, _, hitM = step_noM(1.0, center_pos, center_vel, np.where(mask)[0][crossed_to_right].astype(np.int32), x_mc)
+                noM_pos, _, hitM, straight_shot = step_noM(1.0, center_pos, center_vel, np.where(mask)[0][crossed_to_right].astype(np.int32), x_mc)
             entered_goal = noM_pos[:,0] > surface[0]
             #print(noM_pos)
 
-            cross_right[crossed_to_right] = np.where(entered_goal, np.where(hitM, 1, 2), 0)
+            cross_right[crossed_to_right] = np.where(entered_goal, np.where(hitM, np.where(straight_shot, 0.5, 0.5*bounce_reward_multiplyer), np.where(straight_shot, 2.3, 2.3*bounce_reward_multiplyer)), 0)
 
         if calculate_cross_left:
             return new_pos, new_vel, recurr_time_m, recurr_mask_m, cross_left, cross_right
@@ -1416,6 +1418,10 @@ def solve_a():
     x_min = np.maximum(x_f * C7/C1 - C2/C1, 0)
     converged = False
     x0 = x_min + 0.01
+    ax0 = (2*x0 - x_f*C7/C1+C2/C1)
+    while (ax0 < x0).any():
+        x0[ax0 < x0] *= 1.1
+        ax0 = (2*x0 - x_f*C7/C1+C2/C1)
     #for n in range(2,11):
     for _ in range(100):
         err = a_error(x0)    
@@ -1687,7 +1693,7 @@ def step(t, calculate_cross_left = False):
     score_avg = np.full((game_number), 0.0)
     while np.any(recurr_mask):
         counter += 1
-        if counter == 100:
+        if counter == 10:
             puck_pos[recurr_mask] = np.array([1,-1])
             puck_vel[recurr_mask] = np.array([0,0])
         if recurr_mask.sum() / len(recurr_mask) < 0.1 and not indexed:
@@ -1734,11 +1740,13 @@ def impulse(epsilon, delta):
     norms = np.linalg.norm(directions, axis=1, keepdims=True)
     norms[norms == 0] = 1.0
     unit_dirs = directions / norms
-    low_vel = np.linalg.norm(puck_vel, axis=1) < 0.002
+    low_vel = np.linalg.norm(puck_vel, axis=1) < 0.15
+    #low_vel[:int(game_number/2)] = False
     puck_vel[low_vel] = puck_vel[low_vel] + delta * unit_dirs[low_vel]
     
-    boost = 0.01
-    threshold = 0.1
+    """
+    boost = 0.02
+    threshold = 0.25
 
     magnitudes = np.linalg.norm(puck_vel, axis=1)
 
@@ -1752,9 +1760,9 @@ def impulse(epsilon, delta):
     
     if np.any(np.logical_not(is_zero)):
         unit_direction[np.logical_not(is_zero)] = (puck_vel / (magnitudes[:,None] + 1e-8))[np.logical_not(is_zero)]
-
+    needs_boost[:int(game_number/2)] = False
     puck_vel[needs_boost] += boost*(unit_direction)[needs_boost]
-
+    """
 def step_noM(t, puck_pos_noM = None, puck_vel_noM = None, recurr_mask=None, x_mc = None):
     
     if puck_pos_noM is None:
@@ -1768,13 +1776,16 @@ def step_noM(t, puck_pos_noM = None, puck_vel_noM = None, recurr_mask=None, x_mc
     else:
         recurr_mask2 = np.zeros((game_number), dtype=np.bool_)
         recurr_mask2[recurr_mask] = True
-        recurr_mask = recurr_mask2
+        recurr_mask = np.copy(recurr_mask2)
 
         recurr_time = np.full((game_number), t, dtype="float32")
         puck_pos_noM2 = np.full((game_number,2), 0.5)
         puck_pos_noM2[recurr_mask] = puck_pos_noM
+        puck_pos_noM = np.copy(puck_pos_noM2)
         puck_vel_noM2 = np.zeros((game_number,2))
         puck_vel_noM2[recurr_mask] = puck_vel_noM
+
+        straight_shot = np.zeros((game_number,), dtype=np.bool_)
 
     recurr_mask_copy = np.copy(recurr_mask)
 
@@ -1786,9 +1797,16 @@ def step_noM(t, puck_pos_noM = None, puck_vel_noM = None, recurr_mask=None, x_mc
         x_mcg[recurr_mask] = x_mc
 
         hitM = np.zeros((game_number), dtype=np.bool_)
+        j = 0        
         while np.any(recurr_mask):
+            if j == 0:
+                straight_shot[recurr_mask] = True
+                j += 1
+            else:
+                straight_shot[recurr_mask & (puck_pos_noM2[:, 0] > puck_radius) & (puck_pos_noM2[:, 0] < bounds[0] - puck_radius)] = False
             puck_pos_noM2[recurr_mask], puck_vel_noM2[recurr_mask], recurr_time[recurr_mask], hitM[recurr_mask], recurr_mask[recurr_mask] = update_puck(recurr_time[recurr_mask], recurr_mask, time + (t-recurr_time)[recurr_mask], no_M = True, noM_pos=puck_pos_noM2, noM_vel = puck_vel_noM2, noM_xm = x_mcg[recurr_mask])
-        return puck_pos_noM2[recurr_mask_copy], puck_vel_noM2[recurr_mask_copy], hitM[recurr_mask_copy]
+        #straight_shot[recurr_mask_copy & (np.abs(puck_pos_noM[:,1] - bounds[1]/2) > (bounds[1]/2 - puck_radius*4))] = False
+        return puck_pos_noM2[recurr_mask_copy], puck_vel_noM2[recurr_mask_copy], hitM[recurr_mask_copy], straight_shot[recurr_mask_copy]
 
     return puck_pos_noM2[recurr_mask_copy], puck_vel_noM2[recurr_mask_copy]
 
@@ -1948,14 +1966,14 @@ def display_state(index, puck_pos_noM=None):
     img = np.flip(img, axis=0)
     # Show the image
     cv2.imshow('Air Hockey State', img)
-    #out.write(img)
+    out.write(img)
     
     cv2.waitKey(1)  # Add small delay so window updates
-    #frame_count += 1
-    #if frame_count == 60*15:
-    #    out.release()
-    #    cv2.destroyAllWindows()
-    #    print(1/0.0)
+    frame_count += 1
+    if frame_count == 60*15:
+        out.release()
+        cv2.destroyAllWindows()
+        print(1/0.0)
 
 def get_mallet_bounds():
     return bounds_mallet

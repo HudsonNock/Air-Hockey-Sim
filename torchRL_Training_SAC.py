@@ -22,9 +22,10 @@ import torch.nn.functional as F4
 import copy
 from torchrl.data import PrioritizedReplayBuffer, LazyTensorStorage
 
-load_filepath = "checkpoints\\SAC_173.pth"
-save_filepath = "checkpoints\\SAC_174.pth" #Best is 12, 15, 22, 44, 76, 103, 121, 134, 142, 160, 165, 178
+load_filepath = "checkpoints\\SAC_200.pth"
+save_filepath = "checkpoints\\SAC_201.pth" #Best is 12, 15, 22, 44, 76, 103, 121, 134, 142, 160, 165, 178
 train = True
+#182, 174
 # Simulation parameters
 obs_dim = 39 #[puck_pos, opp_mallet_pos] #guess mean low stdl
             #[mallet_pos, mallet_vel, past mallet_pos, past malet_vel, past action]
@@ -60,12 +61,12 @@ V_std_y = 0.07
 # (7.629e-06, 6.617e-03, 7e-02, -7.445e-06, -2.661e-03, 5.277e-03
 
 ab_ranges = np.array([
-        [1.8e-05, 2.3e-05], #[6.9e-6, 8.5e-6],  # a1
-        [9.3e-3, 1.10e-2],  # a2
+        [1.6e-05, 2.0e-05], #[6.9e-6, 8.5e-6],  # a1
+        [9.0e-3, 1.12e-2],  # a2
         [5.25e-2, 8.15e-2],  # a3
-        [-1.4e-05, -1.1e-05], #[-8.19e-6, -6.01e-6], # b1
-        [-5.5e-3, -4.6e-3],   # b2
-	[3.5e-4, 5.5e-4]    #[3.5e-3, 6.5e-3] #b3
+        [-1.3e-05, -9.0e-06], #[-8.19e-6, -6.01e-6], # b1
+        [-4.5e-3, -3.4e-3],   # b2
+	[2.0e-3, 2.6e-3]    #[3.5e-3, 6.5e-3] #b3
     ])
 
 #[2.259685e-05, 1.0497799e-02, 6.2993579e-02, -1.256968e-05, -5.087524e-03, 4.398169e-04])
@@ -73,26 +74,8 @@ ab_ranges = np.array([
 speed_var = [0.7,1.2]
 
 #mean, std, min, max
-image_delay = [15.166/1000, 0.3/1000, 14/1000, 16.5/1000]
-mallet_delay = [7.17/1000, 0.3/1000, 6.2/1000, 8.0/1000]
-camera_period = 1/120.0
-
-"""
-Mallet Delay
-
-4.6-4.7ms: 16 frames (3.2%)
-5.3-5.4ms: 166 frames (33.5%)
-6.1-6.2ms: 158 frames (31.9%)
-6.8-6.9ms: 144 frames (29.1%)
-7.6-7.7ms: 2 frames (0.4%)
-
-FPS: 119.96
-
-Image Delay
-
-Mean 13.38839 ms
-range +- 0.28039
-"""
+image_delay = [13.38839/1000, 0.2/1000, 13/1000, 13.7/1000]
+camera_period = 1/119.96
 
 frames = [0, 1, 2, 5, 11]
 
@@ -101,11 +84,11 @@ width = 1.144
 bounds = np.array([height, width])
 goal_width = 0.3345
 
-lr_val = 5e-4
+lr_val = 2e-4
 policy_lrs = [lr_val, lr_val, lr_val] #policy, def1, def2
 Q_lrs = [lr_val, lr_val, lr_val] #policy, def1, def2
 
-gamma = 0.99
+gamma = 0.98
 tau = 0.005
 
 batch_size = 1024
@@ -118,8 +101,25 @@ img_offset = 12 #17
 beam_coeffs = np.array([[camera_pos[1]/(camera_pos[1]-beam_height+beam_thickness), (beam_height-beam_thickness)*(camera_pos[0]-beam_width/2)/(camera_pos[1]-beam_height+beam_thickness) - beam_width/2], [1+(beam_height)/(camera_pos[1]-beam_height), beam_height*(camera_pos[0]+beam_width/2)/(camera_pos[1]-beam_height) + beam_width/2]])
 
 policy_modules = [] #[policy, def1, def2]
+example_policy_modules = []
 for _ in range(2):
     policy_modules.append(nn.Sequential(
+                            nn.Linear(obs_dim, 512),
+                            nn.LayerNorm(512),
+                            nn.LeakyReLU(0.01),
+                            nn.Linear(512, 256),
+                            nn.LayerNorm(256),
+                            nn.LeakyReLU(0.01),
+                            nn.Linear(256, 128),
+                            nn.LeakyReLU(0.01),
+                            nn.Linear(128, 64),
+                            nn.LeakyReLU(),
+                            nn.Linear(64, action_dim * 2),
+                            NormalParamExtractor()
+                        ))
+
+for _ in range(2):
+    example_policy_modules.append(nn.Sequential(
                             nn.Linear(obs_dim, 512),
                             nn.LayerNorm(512),
                             nn.LeakyReLU(0.01),
@@ -183,6 +183,11 @@ for i in range(2):
                             policy_modules[i], in_keys=["observation"], out_keys=["loc", "scale"]
                         ).to('cuda')
 
+for i in range(2):
+    example_policy_modules[i] = TensorDictModule(
+                            example_policy_modules[i], in_keys=["observation"], out_keys=["loc", "scale"]
+                        ).to('cuda')
+
 class QNetWrapper(nn.Module):
     def __init__(self, net):
         super().__init__()
@@ -227,20 +232,57 @@ for i in range(2):
             default_interaction_type=tensordict.nn.InteractionType.RANDOM,
             return_log_prob=True,
         ).to('cuda')
-    else:
-        policy_modules[i] = ProbabilisticActor( 
-            module=policy_modules[i],
+        example_policy_modules[i] = ProbabilisticActor(
+            module=example_policy_modules[i],
             in_keys=["loc", "scale"],
             distribution_class=TanhNormal,
             distribution_kwargs={
-                "low": torch.tensor(lows[i], dtype=torch.float32),
-                "high": torch.tensor(highs[i], dtype=torch.float32), 
+                "low": torch.tensor(lows[0], dtype=torch.float32),
+                "high": torch.tensor(highs[0], dtype=torch.float32), 
+            },
+            default_interaction_type=tensordict.nn.InteractionType.RANDOM,
+            return_log_prob=True,
+        ).to('cuda')
+    else:
+        if i == 0:
+            policy_modules[i] = ProbabilisticActor( 
+                module=policy_modules[i],
+                in_keys=["loc", "scale"],
+                distribution_class=TanhNormal,
+                distribution_kwargs={
+                    "low": torch.tensor(lows[i], dtype=torch.float32),
+                    "high": torch.tensor(highs[i], dtype=torch.float32), 
+                },
+                #default_interaction_type=tensordict.nn.InteractionType.RANDOM,
+                return_log_prob=True,
+            ).to('cuda')
+        else:
+            policy_modules[i] = ProbabilisticActor( 
+                module=policy_modules[i],
+                in_keys=["loc", "scale"],
+                distribution_class=TanhNormal,
+                distribution_kwargs={
+                    "low": torch.tensor(lows[i], dtype=torch.float32),
+                    "high": torch.tensor(highs[i], dtype=torch.float32), 
+                },
+                default_interaction_type=tensordict.nn.InteractionType.RANDOM,
+                return_log_prob=True,
+            ).to('cuda')
+        example_policy_modules[i] = ProbabilisticActor(
+            module=example_policy_modules[i],
+            in_keys=["loc", "scale"],
+            distribution_class=TanhNormal,
+            distribution_kwargs={
+                "low": torch.tensor(lows[0], dtype=torch.float32),
+                "high": torch.tensor(highs[0], dtype=torch.float32), 
             },
             default_interaction_type=tensordict.nn.InteractionType.RANDOM,
             return_log_prob=True,
         ).to('cuda')
 
-target_entropy = [-float(3.5), -float(3.6)]
+target_entropy = [-float(5.0), -float(3.6)]
+
+
 
 
 log_alphas = []
@@ -393,12 +435,20 @@ def save_checkpoint(path):
 
 def load_checkpoint(path):
     checkpoint = torch.load(path)
+
+    checkpoint_straight = torch.load("checkpoints\\SAC_182.pth")
+    checkpoint_bounce = torch.load("checkpoints\\SAC_174.pth")
     
     for i in range(2):
         policy_modules[i].load_state_dict(checkpoint['policies'][i])
         log_alphas[i].data.copy_(checkpoint['log_alphas'][i].data)
         policy_optimizers[i].load_state_dict(checkpoint['opt_pols'][i])
         alpha_optimizers[i].load_state_dict(checkpoint['opt_alphas'][i])
+
+    example_policy_modules[0].load_state_dict(checkpoint_straight['policies'][0])
+    example_policy_modules[1].load_state_dict(checkpoint_bounce['policies'][0])
+    del checkpoint_straight
+    del checkpoint_bounce
         
     for i in range(4):
         Q_modules[i].load_state_dict(checkpoint['critics'][i])
@@ -418,12 +468,33 @@ def load_checkpoint(path):
 
     for i in range(2):
         for param_group in alpha_optimizers[i].param_groups:
-            param_group['lr'] = 1e-5
+            param_group['lr'] = 5e-5
     
     print(f"Loaded checkpoint from {path}")
 
 if load_filepath is not None:
     load_checkpoint(load_filepath)
+
+def sample_mallet_delay(n_samples=1):
+    intervals = np.array([
+        [4.6, 4.7],
+        [5.3, 5.4],
+        [6.1, 6.2],
+        [6.8, 6.9],
+        [7.6, 7.7]
+    ])
+    counts = np.array([16, 166, 158, 144, 2])
+    probabilities = counts / counts.sum()
+
+    # Randomly pick indices of intervals based on probabilities
+    indices = np.random.choice(len(intervals), size=n_samples, p=probabilities)
+    
+    # Get the mins and maxes for the chosen intervals
+    lows = intervals[indices, 0]
+    highs = intervals[indices, 1]
+    
+    # Sample uniformly within those ranges
+    return np.random.uniform(lows, highs) / 1000.0
 
 envs = 2048 #2048
 if not train:
@@ -646,7 +717,7 @@ agent_actions = CircularBuffer(agent_actions)
 
 mallet_time = np.empty((camera_buffer_size,))
 for i in range(len(mallet_time)):
-    mallet_time[i] = agent_actions.get(i) - np.clip(np.random.normal(mallet_delay[0], mallet_delay[1]), mallet_delay[2], mallet_delay[3])
+    mallet_time[i] = agent_actions.get(i) - sample_mallet_delay()
 mallet_time = CircularBuffer(mallet_time)
 
 save_num = 0
@@ -671,6 +742,8 @@ next_state_def = defending.copy()
 attack_mask = np.ones((2*envs), dtype=np.bool_)
 
 crossed = np.zeros((2*envs,))
+bounce_reward_multiplyer = 1.001
+sim.bounce_reward_multiplyer = bounce_reward_multiplyer
 
 past_xf = np.stack([obs[:envs, 28:30], obs[envs:, 28:30]], axis=1)
 past_xf[:,1,:2] = bounds-past_xf[:,1,:2]
@@ -681,14 +754,32 @@ actions_since_reset = 0
 
 flipped = np.random.random((2*envs,)) > 0.5
 
-random_offset_attack = (np.random.uniform(size=(2*envs,))-0.5)*0#0.06
-random_offset_defending = (np.random.uniform(size=(2*envs,))-0.5)*0#0.03
-random_offset = (np.random.uniform(size=(2*envs,))-0.5)*0#0.03
-random_offset[:] = random_offset_defending
+#random_offset_attack = (np.random.uniform(size=(2*envs,))-0.5)*0.06
+#random_offset_defending = (np.random.uniform(size=(2*envs,))-0.5)*0#0.03
+random_offset = (np.random.uniform(size=(2*envs,))-0.5)*0.02 #0.04
+random_offset[np.random.random((2*envs,)) < 0.7] = 0
+#random_offset[:] = random_offset_defending
+left_envs_mask = np.zeros((2*envs,), dtype=np.bool_)
+right_envs_mask = np.zeros((2*envs,), dtype=np.bool_)
+left_envs_mask[:envs] = True
+right_envs_mask[envs:] = True
 past_puck_pos = puck_pos.copy()
+
+
+def_pos_mask = np.zeros((envs,), dtype=np.bool_)
+mask_def_envs = np.zeros((envs,), dtype=np.bool_)
+mask_def_envs[self_play:self_play+int((envs-self_play)/3.0)] = True
+def_pos = np.random.random((envs,)) * (bounds[0]/2 - 2*mallet_r) + mallet_r
+defending_mask_pos = np.zeros((2*envs,), dtype=np.bool_)
 
 action_skips = np.zeros((envs-self_play,), dtype=np.int8)
 
+shot_counts = [0,0]
+if train:
+    straight_shot_mask = np.zeros((2*envs,), dtype=np.bool_)
+    straight_shot_mask[self_play-128:self_play+256+128] = np.random.random((512,)) > 0.5
+    alternate_model_mask = np.zeros((2*envs,), dtype=np.bool_)
+    alternate_model_mask[self_play-128:self_play+256+128] = True
 #move timeline to first action time
 while True:
     img_idx = None
@@ -767,7 +858,7 @@ while True:
         agent_actions.subtract(next_img)
         mallet_time.subtract(next_img)
         agent_actions.put(np.clip(np.random.normal(image_delay[0], image_delay[1]), image_delay[2], image_delay[3]))
-        mallet_time.put(agent_actions.get(0) - np.clip(np.random.normal(mallet_delay[0], mallet_delay[1]), mallet_delay[2], mallet_delay[3]))
+        mallet_time.put(agent_actions.get(0) - sample_mallet_delay())
 
         inference_img.put(np.logical_not(inference_img.get(0)))
     elif next_mallet < next_img and next_mallet < next_action:
@@ -833,20 +924,35 @@ if train:
         print("simulating...")
 
         for timestep in range(10):
-            random_offset[defending] = random_offset_defending[defending]
-            random_offset[np.logical_not(defending)] = random_offset_attack[np.logical_not(defending)]
+            #random_offset[defending] = random_offset_defending[defending]
+            #random_offset[np.logical_not(defending)] = random_offset_attack[np.logical_not(defending)]
             with torch.no_grad():
 
-                past_obs[:, 21] += random_offset
-                past_obs[:, 25] += random_offset
+                past_obs[:envs, 21] += random_offset[:envs]
+                past_obs[:envs, 25] += random_offset[:envs]
+                past_obs[right_envs_mask & np.logical_not(defending), 21] += random_offset[right_envs_mask & np.logical_not(defending)]
+                past_obs[right_envs_mask & np.logical_not(defending), 25] += random_offset[right_envs_mask & np.logical_not(defending)]
+                past_obs[right_envs_mask & defending, 20] += random_offset[right_envs_mask & defending]
+                past_obs[right_envs_mask & defending, 24] += random_offset[right_envs_mask & defending]
 
                 flipped = np.random.random((2*envs,)) > 0.5
                 past_obs[flipped] = apply_symmetry(past_obs[flipped])
 
                 tensor_obs = TensorDict({"observation": torch.tensor(past_obs, dtype=torch.float32)}).to('cuda')
-
+                
                 policy_out = policy_modules[0](tensor_obs)
                 actions = policy_out["action"].detach().to('cpu')
+
+                straight_shot_mask[self_play-128:self_play+256+128] = np.logical_xor(straight_shot_mask[self_play-128:self_play+256+128], np.random.random((512,)) > 0.99)
+
+                tensor_obs_straight = TensorDict({"observation": torch.tensor(past_obs[straight_shot_mask], dtype=torch.float32)}).to('cuda')
+                tensor_obs_bounce = TensorDict({"observation": torch.tensor(past_obs[np.logical_not(straight_shot_mask) & alternate_model_mask], dtype=torch.float32)}).to('cuda')
+
+                policy_straight_out = example_policy_modules[0](tensor_obs_straight)
+                actions[straight_shot_mask] = policy_straight_out["action"].detach().to('cpu')
+                
+                policy_bounce_out = example_policy_modules[1](tensor_obs_bounce)
+                actions[np.logical_not(straight_shot_mask) & alternate_model_mask] = policy_bounce_out["action"].detach().to('cpu')
 
                 actions_np = actions.numpy()    
 
@@ -856,11 +962,25 @@ if train:
 
                 actions_np[defending & defending_mask] = def_actions[defending[envs+self_play:]]
 
+                def_pos_mask[:] = 0
+                def_pos_mask[defending[envs:] & (past_puck_pos[:,0] < bounds[0]/2) & mask_def_envs] = True
+                def_pos_xf = np.stack([def_pos[def_pos_mask], bounds[1]/2 - (past_puck_pos[def_pos_mask, 1] - bounds[1]/2) * def_pos[def_pos_mask] / (bounds[0] - past_puck_pos[def_pos_mask, 0])], axis=1)
+                def_pos_V = np.stack([np.random.random((len(def_pos_xf),)), np.zeros((len(def_pos_xf),))], axis=1) 
+                algorithm_def_action = np.concatenate([def_pos_xf, def_pos_V, np.random.random((len(def_pos_xf), 1)) * 0.01 + 0.3], axis=1)
+                
+                defending_mask_pos[envs:] = def_pos_mask
+                actions_np[defending_mask_pos] = algorithm_def_action
+                actions_np[:,1][defending_mask_pos & flipped] = bounds[1] - actions_np[:,1][defending_mask_pos & flipped]
+
                 past_obs[flipped] = apply_symmetry(past_obs[flipped])
                 actions_np[:,1][flipped] = bounds[1] - actions_np[:,1][flipped]
 
-                past_obs[:, 21] -= random_offset
-                past_obs[:, 25] -= random_offset
+                past_obs[:envs, 21] -= random_offset[:envs]
+                past_obs[:envs, 25] -= random_offset[:envs]
+                past_obs[right_envs_mask & np.logical_not(defending), 21] -= random_offset[right_envs_mask & np.logical_not(defending)]
+                past_obs[right_envs_mask & np.logical_not(defending), 25] -= random_offset[right_envs_mask & np.logical_not(defending)]
+                past_obs[right_envs_mask & defending, 20] -= random_offset[right_envs_mask & defending]
+                past_obs[right_envs_mask & defending, 24] -= random_offset[right_envs_mask & defending]
                     
             xf = np.stack([actions_np[:envs, :2], actions_np[envs:,:2]], axis=1)
             
@@ -881,11 +1001,13 @@ if train:
             Vo[:,1] = np.maximum(Vo[:,1], 0.1)
             Vo = np.stack([Vo[:envs,:], Vo[envs:,:]], axis=1)
 
-            rewards[:] += 0.3 * actions_np[:,4]
+            rewards[np.logical_not(defending & defending_mask)] += 0.5 * actions_np[np.logical_not(defending & defending_mask),4]
+            rewards[defending & defending_mask] += np.where(past_puck_pos[(defending & defending_mask)[envs:], 0] < bounds[0]/2, 0.5 * actions_np[defending & defending_mask,4], 0)
+
             no_update_mask = np.stack([actions_np[:envs,4] > np.random.random((envs,))*1.01, np.concatenate([actions_np[envs:envs+self_play,4] > np.random.random((self_play,))*1.01, actions_np[envs+self_play:,4] > np.random.random((envs-self_play,))*1.01], axis=0)], axis=1)
             action_skips += (action_skips != 0)
-            action_skips += (action_skips == 0) & (actions_np[envs+self_play:,4] > 0.5)
-            action_skips[action_skips == 5] = 0
+            action_skips += (action_skips == 0) & np.logical_not(no_update_mask[self_play:, 1])
+            action_skips[action_skips == 4] = 0
             action_skips[np.logical_not(defending[envs+self_play:])] = 0
 
             no_update_mask[self_play:,1][action_skips != 0] = True
@@ -953,15 +1075,15 @@ if train:
                         for idx in env_err:
                             err_dones[idx] = True
                             if puck_pos[idx, 0] < bounds[0]/2:
-                                terminal_rewards[idx] -= 300.0
+                                terminal_rewards[idx] -= 500.0
                             elif idx < self_play:
-                                terminal_rewards[envs+idx] -= 300.0
+                                terminal_rewards[envs+idx] -= 500.0
 
-                    terminal_rewards[:envs][entered_left_goal_mask] -= 300
-                    terminal_rewards[:envs][entered_right_goal_mask] += 400
+                    terminal_rewards[:envs][entered_left_goal_mask] -= 500
+                    terminal_rewards[:envs][entered_right_goal_mask] += 700
 
-                    terminal_rewards[envs:envs+self_play][entered_left_goal_mask[:self_play]] += 400
-                    terminal_rewards[envs:][entered_right_goal_mask] -= 300.0
+                    terminal_rewards[envs:envs+self_play][entered_left_goal_mask[:self_play]] += 700
+                    terminal_rewards[envs:][entered_right_goal_mask] -= 500.0
 
                     err_dones[entered_left_goal_mask | entered_right_goal_mask] = True
 
@@ -1024,7 +1146,7 @@ if train:
                     agent_actions.subtract(next_img)
                     mallet_time.subtract(next_img)
                     agent_actions.put(np.clip(np.random.normal(image_delay[0], image_delay[1]), image_delay[2], image_delay[3]))
-                    mallet_time.put(agent_actions.get(0) - np.clip(np.random.normal(mallet_delay[0], mallet_delay[1]), mallet_delay[2], mallet_delay[3]))
+                    mallet_time.put(agent_actions.get(0) - sample_mallet_delay())
 
                     inference_img.put(np.logical_not(inference_img.get(0)))
                 elif next_mallet < next_img and next_mallet < next_action:
@@ -1040,15 +1162,15 @@ if train:
                         for idx in env_err:
                             err_dones[idx] = True
                             if puck_pos[idx, 0] < bounds[0]/2:
-                                terminal_rewards[idx] -= 300.0
+                                terminal_rewards[idx] -= 500.0
                             elif idx < self_play:
-                                terminal_rewards[envs+idx] -= 300.0
+                                terminal_rewards[envs+idx] -= 500.0
 
-                    terminal_rewards[:envs][entered_left_goal_mask] -= 300
-                    terminal_rewards[:envs][entered_right_goal_mask] += 400
+                    terminal_rewards[:envs][entered_left_goal_mask] -= 500
+                    terminal_rewards[:envs][entered_right_goal_mask] += 700
 
-                    terminal_rewards[envs:envs+self_play][entered_left_goal_mask[:self_play]] += 400
-                    terminal_rewards[envs:][entered_right_goal_mask] -= 300
+                    terminal_rewards[envs:envs+self_play][entered_left_goal_mask[:self_play]] += 700
+                    terminal_rewards[envs:][entered_right_goal_mask] -= 500
 
                     err_dones[entered_left_goal_mask | entered_right_goal_mask] = True
 
@@ -1080,15 +1202,15 @@ if train:
                         for idx in env_err:
                             err_dones[idx] = True
                             if puck_pos[idx, 0] < bounds[0]/2:
-                                terminal_rewards[idx] -= 300.0
+                                terminal_rewards[idx] -= 500.0
                             elif idx < self_play:
-                                terminal_rewards[envs+idx] -= 300.0
+                                terminal_rewards[envs+idx] -= 500.0
 
-                    terminal_rewards[:envs][entered_left_goal_mask] -= 300
-                    terminal_rewards[:envs][entered_right_goal_mask] += 400
+                    terminal_rewards[:envs][entered_left_goal_mask] -= 500
+                    terminal_rewards[:envs][entered_right_goal_mask] += 700
 
-                    terminal_rewards[envs:envs+self_play][entered_left_goal_mask[:self_play]] += 400
-                    terminal_rewards[envs:][entered_right_goal_mask] -= 300
+                    terminal_rewards[envs:envs+self_play][entered_left_goal_mask[:self_play]] += 700
+                    terminal_rewards[envs:][entered_right_goal_mask] -= 500
                     
                     err_dones[entered_left_goal_mask | entered_right_goal_mask] = True
 
@@ -1101,8 +1223,8 @@ if train:
                     camera_obs = camera_buffer.get(indices=[img_idx, img_idx+1, img_idx+2, img_idx+5, img_idx+11])
                     obs[:,:20] = camera_obs
 
-                    next_state_def[envs:] = (puck_pos[:,0] < bounds[0]/2) | (defending[envs:] & (np.linalg.norm(puck_vel, axis=1) > 0.5))
-                    next_state_def[:envs] = (puck_pos[:,0] > bounds[0]/2) | (defending[:envs] & (np.linalg.norm(puck_vel, axis=1) > 0.5))
+                    next_state_def[envs:] = (puck_pos[:,0] < bounds[0]/2) | (defending[envs:] & (np.linalg.norm(puck_vel, axis=1) > 1.0))
+                    next_state_def[:envs] = (puck_pos[:,0] > bounds[0]/2) | (defending[:envs] & (np.linalg.norm(puck_vel, axis=1) > 1.0))
                     camera_obs = camera_buffer.get(indices=[img_idx+img_offset, img_idx+img_offset+1, img_idx+img_offset+2, img_idx+img_offset+5, img_idx+img_offset+11])[envs+self_play:][next_state_def[envs+self_play:]]
                     obs[envs+self_play:,:20][next_state_def[envs+self_play:]] = camera_obs
 
@@ -1115,14 +1237,17 @@ if train:
             actions_since_reset += 1
             attack_mask[envs+self_play:] = np.logical_not(defending[envs+self_play:]) & np.logical_not(next_state_def[envs+self_play:])
 
-            rewards[:envs] += np.where((puck_pos[:,0] < bounds[0]/2) & (np.abs(puck_vel[:,0]) < 0.15), -2.2, 0)
-            rewards[envs:] += np.where((puck_pos[:,0] > bounds[0]/2) & (np.abs(puck_vel[:,0]) < 0.15), -2.2, 0)
+            rewards[:envs] += np.where((puck_pos[:,0] < bounds[0]/2) & (np.abs(puck_vel[:,0]) < 0.15), -5.0, 0)
+            rewards[envs:][np.logical_not(defending[envs:])] += np.where((puck_pos[np.logical_not(defending[envs:])][:,0] > bounds[0]/2) & (np.abs(puck_vel[np.logical_not(defending[envs:])][:,0]) < 0.15), -5.0, 0)
 
             rewards[:envs][np.logical_not(defending[:envs]) & (puck_pos[:,0] > bounds[0]/2)] += (np.linalg.norm(puck_vel,axis=1)*8.5 * crossed[:envs])[np.logical_not(defending[:envs]) & (puck_pos[:,0] > bounds[0]/2)]
             rewards[envs:][np.logical_not(defending[envs:]) & (puck_pos[:,0] < bounds[0]/2)] += (np.linalg.norm(puck_vel,axis=1)*8.5 * crossed[envs:])[np.logical_not(defending[envs:]) & (puck_pos[:,0] < bounds[0]/2)]
 
-            rewards[:envs] += np.where((puck_pos[:,0] < bounds[0]/2), -0.7, 0)
-            rewards[envs:] += np.where((puck_pos[:,0] > bounds[0]/2) & attack_mask[envs:], -0.7, 0)
+            shot_counts[0] += np.sum((np.abs(crossed - 0.5) < 0.000001) | (np.abs(crossed - 2.3) < 0.000001))
+            shot_counts[1] += np.sum((np.abs(crossed) > 0.000001) & (np.abs(crossed - 0.5) > 0.000001) & (np.abs(crossed - 2.3) > 0.000001))
+
+            rewards[:envs] += np.where((puck_pos[:,0] < bounds[0]/2), -0.15, 0)
+            rewards[envs:] += np.where((puck_pos[:,0] > bounds[0]/2) & attack_mask[envs:], -0.15, 0)
 
             rewards[:envs][(past_puck_pos[:,0] < bounds[0]/2) & (puck_pos[:,0] > bounds[0]/2)] -= 25.0
             rewards[envs:][(past_puck_pos[:,0] > bounds[0]/2) & (puck_pos[:,0] < bounds[0]/2)] -= 25.0
@@ -1143,6 +1268,8 @@ if train:
             rewards /= 25
             terminal_rewards[dones] = 0
 
+            rewards[defending & defending_mask] += np.where((past_puck_pos[self_play:][defending[envs+self_play:]][:,0] < bounds[0]/2), 0.2*past_obs[defending & defending_mask][:, 20], 0)
+
             #print("----")
             #print(past_obs[0,:])
             #print(actions_np[0,:])
@@ -1162,13 +1289,13 @@ if train:
 
             policy_buffer.extend(td)
 
-            defending_td_mask = ((defending[envs+self_play:]) & (action_skips == 0)) | (defending[envs+self_play:] & np.logical_not(next_state_def[envs+self_play:]))
+            defending_td_mask = ((defending[envs+self_play:]) & (action_skips == 0)) | (defending[envs+self_play:] & np.logical_not(next_state_def[envs+self_play:])) | dones[envs+self_play:]
             
             td = TensorDict({
                     "observation": torch.tensor(past_obs[envs+self_play:][defending_td_mask], dtype=torch.float32),
                     "action": torch.tensor(actions_np[envs+self_play:][defending_td_mask], dtype=torch.float32),
                     "next": TensorDict({
-                        "reward": torch.tensor(rewards[envs+self_play:, None][defending_td_mask], dtype=torch.float32),
+                        "reward": torch.tensor(1.4*rewards[envs+self_play:, None][defending_td_mask], dtype=torch.float32),
                         "observation": torch.tensor(obs[envs+self_play:][defending_td_mask], dtype=torch.float32),
                         "done": torch.tensor(dones[envs+self_play:, None][defending_td_mask], dtype=torch.bool),
                     }, batch_size=[int(np.sum(defending_td_mask))]),
@@ -1178,14 +1305,14 @@ if train:
 
             defending[:] = next_state_def
                 
-            sim.display_state(self_play+10)
+            sim.display_state(envs-10)
 
             dones[:envs] = err_dones
             dones[envs:] = err_dones
 
-            if actions_since_reset == 600:
-                actions_since_reset = 0
-                dones[:] = True
+            #if actions_since_reset == 600:
+            #    actions_since_reset = 0
+            #    dones[:] = True
 
             num_resets = int(np.sum(dones[:envs]))
 
@@ -1227,6 +1354,23 @@ if train:
             continue
 
         print("training...")
+        #if bounce_reward_multiplyer > 1.0:
+        #    if shot_counts[0] > shot_counts[1]:
+        #        bounce_reward_multiplyer += 0.01
+        #    else:
+        #        bounce_reward_multiplyer -= 0.05
+        #else:
+        #    if shot_counts[0] > shot_counts[1]:
+        #        bounce_reward_multiplyer += 0.05
+        #    else:
+        #        bounce_reward_multiplyer *= 0.99
+        print("--")
+        print(shot_counts[0])
+        print(shot_counts[1])
+        #print(bounce_reward_multiplyer)
+        #sim.bounce_reward_multiplyer = bounce_reward_multiplyer
+        shot_counts[0] = 0
+        shot_counts[1] = 0
         torch.cuda.empty_cache()
 
         if (len(policy_buffer) < batch_size) or (len(def_buffer) < batch_size): # or (len(def2_buffer) < batch_size):
@@ -1251,17 +1395,18 @@ if train:
                 print(samples[0,:,1].mean())
                 print(samples[0,:,2].mean())
 
-        if samples[0,:,0].mean() < -100 or samples[0,:,0].mean() > 100:
+        if samples[0,:,0].mean() < -1000 or samples[0,:,0].mean() > 1000:
             print("err")
             print(1/0)
-        if update % 50 == 0:
+        if (update % 50 == 0) and (update != 0):
             save_checkpoint(save_filepath)
 
 puck_vel = np.zeros((envs,2))
 puck_pos = np.zeros((envs,2))
 past_puck_pos = puck_pos.copy()
-random_offset = (np.random.uniform(size=(2*envs,))-0.5)*0
+random_offset = (np.random.uniform(size=(2*envs,))-0.5)*0 #np.ones((2*envs,))*0.06#
 action_skips = np.zeros((envs-self_play,), dtype=np.int8)
+def_pos = np.random.uniform((int((envs-self_play)/3.0),)) * (bounds[0]/2 - mallet_r * 2) + bounds[0]/2
 #random_offset[1] = 0.05
 for update in range(500000):  # Training loop
     print(update)
@@ -1281,7 +1426,7 @@ for update in range(500000):  # Training loop
 
             policy_out = policy_modules[0](tensor_obs)
             actions = policy_out["action"].detach().to('cpu')
-            q_value = Q_modules[0](tensor_obs)["q_value"]
+            q_value = Q_modules[1](tensor_obs)["q_value"]
             #print(q_value[1,:].detach().cpu().numpy())
 
             actions_np = actions.numpy()    
@@ -1292,6 +1437,9 @@ for update in range(500000):  # Training loop
             def_actions = def_out["action"].detach().to('cpu')
 
             actions_np[defending & defending_mask] = def_actions[defending[envs+self_play:]]
+            #actions_np[envs+1,:] = np.array([0.2, bounds[1]/2 - (past_puck_pos[1,1] - bounds[1]/2) * 0.2 / (bounds[0] - past_puck_pos[1,0]), 0.8, 0.0, 0.1])
+
+#def_pos_xf = np.stack([def_pos[def_pos_mask], bounds[1]/2 - (past_puck_pos[def_pos_mask, 1] - bounds[1]/2) * def_pos[def_pos_mask] / (bounds[0] - past_puck_pos[def_pos_mask, 0])], axis=1)
 
             past_obs[:, 21] -= random_offset
             past_obs[:, 25] -= random_offset
@@ -1317,8 +1465,8 @@ for update in range(500000):  # Training loop
         rewards[:] += 0.2 * actions_np[:,4]
         no_update_mask = np.stack([actions_np[:envs,4] > np.random.random((envs,))*1.01, np.concatenate([actions_np[envs:envs+self_play,4] > np.random.random((self_play,))*1.01, actions_np[envs+self_play:,4] > np.random.random((envs-self_play,))*1.01], axis=0)], axis=1)
         action_skips += (action_skips != 0)
-        action_skips += (action_skips == 0) & (actions_np[envs+self_play:,4] > 0.5)
-        action_skips[action_skips == 5] = 0
+        action_skips += (action_skips == 0) & (actions_np[envs+self_play:,4] < 0.5)
+        action_skips[action_skips == 4] = 0
         action_skips[np.logical_not(defending[envs+self_play:])] = 0
 
         no_update_mask[self_play:,1][action_skips != 0] = True
@@ -1385,15 +1533,15 @@ for update in range(500000):  # Training loop
                     for idx in env_err:
                         err_dones[idx] = True
                         if puck_pos[idx, 0] < bounds[0]/2:
-                            terminal_rewards[idx] -= 100.0
+                            terminal_rewards[idx] -= 300.0
                         elif idx < self_play:
-                            terminal_rewards[envs+idx] -= 100.0
+                            terminal_rewards[envs+idx] -= 300.0
 
-                terminal_rewards[:envs][entered_left_goal_mask] -= 100
-                terminal_rewards[:envs][entered_right_goal_mask] += 100
+                terminal_rewards[:envs][entered_left_goal_mask] -= 300
+                terminal_rewards[:envs][entered_right_goal_mask] += 700
 
-                terminal_rewards[envs:envs+self_play][entered_left_goal_mask[:self_play]] += 100
-                terminal_rewards[envs:][entered_right_goal_mask] -= 100
+                terminal_rewards[envs:envs+self_play][entered_left_goal_mask[:self_play]] += 700
+                terminal_rewards[envs:][entered_right_goal_mask] -= 300
 
                 err_dones[entered_left_goal_mask | entered_right_goal_mask] = True
 
@@ -1449,7 +1597,7 @@ for update in range(500000):  # Training loop
                 agent_actions.subtract(next_img)
                 mallet_time.subtract(next_img)
                 agent_actions.put(np.clip(np.random.normal(image_delay[0], image_delay[1]), image_delay[2], image_delay[3]))
-                mallet_time.put(agent_actions.get(0) - np.clip(np.random.normal(mallet_delay[0], mallet_delay[1]), mallet_delay[2], mallet_delay[3]))
+                mallet_time.put(agent_actions.get(0) - sample_mallet_delay())
 
                 inference_img.put(np.logical_not(inference_img.get(0)))
             elif next_mallet < next_img and next_mallet < next_action:
@@ -1465,15 +1613,15 @@ for update in range(500000):  # Training loop
                     for idx in env_err:
                         err_dones[idx] = True
                         if puck_pos[idx, 0] < bounds[0]/2:
-                            terminal_rewards[idx] -= 100.0
+                            terminal_rewards[idx] -= 300.0
                         elif idx < self_play:
-                            terminal_rewards[envs+idx] -= 100.0
+                            terminal_rewards[envs+idx] -= 300.0
 
-                terminal_rewards[:envs][entered_left_goal_mask] -= 100
-                terminal_rewards[:envs][entered_right_goal_mask] += 100
+                terminal_rewards[:envs][entered_left_goal_mask] -= 300
+                terminal_rewards[:envs][entered_right_goal_mask] += 700
 
-                terminal_rewards[envs:envs+self_play][entered_left_goal_mask[:self_play]] += 100
-                terminal_rewards[envs:][entered_right_goal_mask] -= 100
+                terminal_rewards[envs:envs+self_play][entered_left_goal_mask[:self_play]] += 700
+                terminal_rewards[envs:][entered_right_goal_mask] -= 300
 
                 err_dones[entered_left_goal_mask | entered_right_goal_mask] = True
 
@@ -1505,15 +1653,15 @@ for update in range(500000):  # Training loop
                     for idx in env_err:
                         err_dones[idx] = True
                         if puck_pos[idx, 0] < bounds[0]/2:
-                            terminal_rewards[idx] -= 100.0
+                            terminal_rewards[idx] -= 300.0
                         elif idx < self_play:
-                            terminal_rewards[envs+idx] -= 100.0
+                            terminal_rewards[envs+idx] -= 300.0
 
-                terminal_rewards[:envs][entered_left_goal_mask] -= 100
-                terminal_rewards[:envs][entered_right_goal_mask] += 100
+                terminal_rewards[:envs][entered_left_goal_mask] -= 300
+                terminal_rewards[:envs][entered_right_goal_mask] += 700
 
-                terminal_rewards[envs:envs+self_play][entered_left_goal_mask[:self_play]] += 100
-                terminal_rewards[envs:][entered_right_goal_mask] -= 100
+                terminal_rewards[envs:envs+self_play][entered_left_goal_mask[:self_play]] += 700
+                terminal_rewards[envs:][entered_right_goal_mask] -= 300
 
                 err_dones[entered_left_goal_mask | entered_right_goal_mask] = True
 
@@ -1526,8 +1674,8 @@ for update in range(500000):  # Training loop
                 camera_obs = camera_buffer.get(indices=[img_idx, img_idx+1, img_idx+2, img_idx+5, img_idx+11])
                 obs[:,:20] = camera_obs
 
-                next_state_def[envs:] = (puck_pos[:,0] < bounds[0]/2) | (defending[envs:] & (np.linalg.norm(puck_vel, axis=1) > 0.5))
-                next_state_def[:envs] = (puck_pos[:,0] > bounds[0]/2) | (defending[:envs] & (np.linalg.norm(puck_vel, axis=1) > 0.5))
+                next_state_def[envs:] = (puck_pos[:,0] < bounds[0]/2) | (defending[envs:] & (np.linalg.norm(puck_vel, axis=1) > 1.0))
+                next_state_def[:envs] = (puck_pos[:,0] > bounds[0]/2) | (defending[:envs] & (np.linalg.norm(puck_vel, axis=1) > 1.0))
                 camera_obs = camera_buffer.get(indices=[img_idx+img_offset, img_idx+img_offset+1, img_idx+img_offset+2, img_idx+img_offset+5, img_idx+img_offset+11])[envs+self_play:][next_state_def[envs+self_play:]]
                 obs[envs+self_play:,:20][next_state_def[envs+self_play:]] = camera_obs
 
@@ -1540,23 +1688,28 @@ for update in range(500000):  # Training loop
         actions_since_reset += 1
         attack_mask[envs+self_play:] = np.logical_not(defending[envs+self_play:]) & np.logical_not(next_state_def[envs+self_play:])
 
-        rewards[:envs] += np.where((puck_pos[:,0] < bounds[0]/2) & (puck_vel[:,0] == 0) & (puck_vel[:,1] == 0), -0.8, 0)
-        rewards[envs:] += np.where((puck_pos[:,0] > bounds[0]/2) & (puck_vel[:,0] == 0) & (puck_vel[:,1] == 0), -0.8, 0)
+        rewards[:envs] += np.where((puck_pos[:,0] < bounds[0]/2) & (np.abs(puck_vel[:,0]) < 0.15), -2.2, 0)
+        rewards[envs:] += np.where((puck_pos[:,0] > bounds[0]/2) & (np.abs(puck_vel[:,0]) < 0.15), -2.2, 0)
 
-        rewards[:envs][np.logical_not(defending[:envs]) & (puck_pos[:,0] > bounds[0]/2)] += (np.linalg.norm(puck_vel,axis=1)*6 * crossed[:envs])[np.logical_not(defending[:envs]) & (puck_pos[:,0] > bounds[0]/2)]
-        rewards[envs:][np.logical_not(defending[envs:]) & (puck_pos[:,0] < bounds[0]/2)] += (np.linalg.norm(puck_vel,axis=1)*6 * crossed[envs:])[np.logical_not(defending[envs:]) & (puck_pos[:,0] < bounds[0]/2)]
+        if crossed[1] != 0:
+            print(crossed[1])
 
-        rewards[:envs][(past_puck_pos[:,0] < bounds[0]/2) & (puck_pos[:,0] > bounds[0]/2)] -= 5.0
-        rewards[envs:][(past_puck_pos[:,0] > bounds[0]/2) & (puck_pos[:,0] < bounds[0]/2)] -= 5.0
+        rewards[:envs][np.logical_not(defending[:envs]) & (puck_pos[:,0] > bounds[0]/2)] += (np.linalg.norm(puck_vel,axis=1)*8.5 * crossed[:envs])[np.logical_not(defending[:envs]) & (puck_pos[:,0] > bounds[0]/2)]
+        rewards[envs:][np.logical_not(defending[envs:]) & (puck_pos[:,0] < bounds[0]/2)] += (np.linalg.norm(puck_vel,axis=1)*8.5 * crossed[envs:])[np.logical_not(defending[envs:]) & (puck_pos[:,0] < bounds[0]/2)]
 
-        rewards[:envs][(past_puck_pos[:,0] < bounds[0]/2) & (puck_pos[:,0] > bounds[0]/2) & (np.linalg.norm(puck_vel,axis=1) < 5.0)] -= 10.0
-        rewards[envs:][(past_puck_pos[:,0] > bounds[0]/2) & (puck_pos[:,0] < bounds[0]/2) & (np.linalg.norm(puck_vel,axis=1) < 5.0)] -= 10.0
+        rewards[:envs] += np.where((puck_pos[:,0] < bounds[0]/2), -0.2, 0)
+        rewards[envs:] += np.where((puck_pos[:,0] > bounds[0]/2) & attack_mask[envs:], -0.7, 0)
 
-        rewards[:envs][(past_puck_pos[:,0] < bounds[0]/2) & (puck_pos[:,0] > bounds[0]/2) & (np.linalg.norm(puck_vel,axis=1) < 2.0)] -= 20.0
-        rewards[envs:][(past_puck_pos[:,0] > bounds[0]/2) & (puck_pos[:,0] < bounds[0]/2) & (np.linalg.norm(puck_vel,axis=1) < 2.0)] -= 20.0
+        rewards[:envs][(past_puck_pos[:,0] < bounds[0]/2) & (puck_pos[:,0] > bounds[0]/2)] -= 25.0
+        rewards[envs:][(past_puck_pos[:,0] > bounds[0]/2) & (puck_pos[:,0] < bounds[0]/2)] -= 25.0
+
+        rewards[:envs][(past_puck_pos[:,0] < bounds[0]/2) & (puck_pos[:,0] > bounds[0]/2) & (np.linalg.norm(puck_vel,axis=1) < 7.0)] -= 100.0
+        rewards[envs:][attack_mask[envs:] & (past_puck_pos[:,0] > bounds[0]/2) & (puck_pos[:,0] < bounds[0]/2) & (np.linalg.norm(puck_vel,axis=1) < 5.0)] -= 100.0
+
+        rewards[:envs][(past_puck_pos[:,0] < bounds[0]/2) & (puck_pos[:,0] > bounds[0]/2) & (np.linalg.norm(puck_vel,axis=1) < 4.0)] -= 200.0
+        rewards[envs:][attack_mask[envs:] & (past_puck_pos[:,0] > bounds[0]/2) & (puck_pos[:,0] < bounds[0]/2) & (np.linalg.norm(puck_vel,axis=1) < 2.0)] -= 200.0
         #rewards[:envs][defending[:envs] & (past_puck_pos[:envs,0] < (bounds[0]/2+2*puck_r)) & (puck_pos[:envs,0] > (bounds[0]/2)+2*puck_r)] -= 10.0
         rewards[:envs+self_play][defending[:envs+self_play] & np.logical_not(next_state_def[:envs+self_play])] += 5.0
-
         obs[:,38] = next_state_def[:]
         dones[:envs] = err_dones #| (defending[envs:] & np.logical_not(next_state_def[envs:]))
         dones[envs:] = dones[envs:] | err_dones
@@ -1566,45 +1719,15 @@ for update in range(500000):  # Training loop
         rewards /= 25
         terminal_rewards[dones] = 0
 
-        #print(np.linalg.norm(puck_vel[1]))
-
-        #if not defending[envs+self_play] and not next_state_def[envs+self_play]:
-        #print("----")
-        #print(past_obs[0])
-        #print(actions_np[0])
-        #if abs(rewards[1]) > 0.01:
-        #print(defending[1])
-        """
-        if (crossed[1] != 0) or (crossed[envs+1] != 0):
-        
-        #
-            print("---")
-            print(crossed[1])
-            
-            #print(defending[1])
-            print(rewards[1])
-            print(np.linalg.norm(puck_vel,axis=1)[1])
-            print(crossed[envs+1])
-            print(rewards[envs+1])
-            print(defending[1])
-            print(defending[envs+1])
-            print(timestep)
-
-        if (np.logical_not(defending[:envs]) & (puck_pos[:,0] > bounds[0]/2))[1] or (np.logical_not(defending[envs:]) & (puck_pos[:,0] < bounds[0]/2))[1]:
-            print("_-_-_-")
-            print(crossed[1])
-            print(crossed[envs+1])
-            print(timestep)
-        """
-        if abs(rewards[1]) > 0.5:
-            print(rewards[1])
+        #if abs(rewards[1]) > 0.5:
+        #    print(rewards[1])
         #print(obs[0])
         #print(dones[0])
 
         defending[:] = next_state_def
 
         sim.display_state(1)
-        print(np.linalg.norm(puck_vel[1,:]))
+        #print(np.linalg.norm(puck_vel[1,:]))
 
         dones[:envs] = err_dones
         dones[envs:] = err_dones

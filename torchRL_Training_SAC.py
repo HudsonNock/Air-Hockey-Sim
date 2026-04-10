@@ -22,8 +22,8 @@ import torch.nn.functional as F4
 import copy
 from torchrl.data import PrioritizedReplayBuffer, LazyTensorStorage
 
-load_filepath = "checkpoints\\SAC_200.pth"
-save_filepath = "checkpoints\\SAC_201.pth" #Best is 12, 15, 22, 44, 76, 103, 121, 134, 142, 160, 165, 178
+load_filepath = "checkpoints\\SAC_205.pth"
+save_filepath = "checkpoints\\SAC_206.pth" #Best is 12, 15, 22, 44, 76, 103, 121, 134, 142, 160, 165, 178
 train = True
 #182, 174
 # Simulation parameters
@@ -84,7 +84,7 @@ width = 1.144
 bounds = np.array([height, width])
 goal_width = 0.3345
 
-lr_val = 2e-4
+lr_val = 1e-4
 policy_lrs = [lr_val, lr_val, lr_val] #policy, def1, def2
 Q_lrs = [lr_val, lr_val, lr_val] #policy, def1, def2
 
@@ -265,7 +265,7 @@ for i in range(2):
                     "low": torch.tensor(lows[i], dtype=torch.float32),
                     "high": torch.tensor(highs[i], dtype=torch.float32), 
                 },
-                default_interaction_type=tensordict.nn.InteractionType.RANDOM,
+                #default_interaction_type=tensordict.nn.InteractionType.RANDOM,
                 return_log_prob=True,
             ).to('cuda')
         example_policy_modules[i] = ProbabilisticActor(
@@ -1223,8 +1223,8 @@ if train:
                     camera_obs = camera_buffer.get(indices=[img_idx, img_idx+1, img_idx+2, img_idx+5, img_idx+11])
                     obs[:,:20] = camera_obs
 
-                    next_state_def[envs:] = (puck_pos[:,0] < bounds[0]/2) | (defending[envs:] & (np.linalg.norm(puck_vel, axis=1) > 1.0))
-                    next_state_def[:envs] = (puck_pos[:,0] > bounds[0]/2) | (defending[:envs] & (np.linalg.norm(puck_vel, axis=1) > 1.0))
+                    next_state_def[envs:] = (puck_pos[:,0] < bounds[0]/2) | (defending[envs:] & (np.linalg.norm(puck_vel, axis=1) > 1.5))
+                    next_state_def[:envs] = (puck_pos[:,0] > bounds[0]/2) | (defending[:envs] & (np.linalg.norm(puck_vel, axis=1) > 1.5))
                     camera_obs = camera_buffer.get(indices=[img_idx+img_offset, img_idx+img_offset+1, img_idx+img_offset+2, img_idx+img_offset+5, img_idx+img_offset+11])[envs+self_play:][next_state_def[envs+self_play:]]
                     obs[envs+self_play:,:20][next_state_def[envs+self_play:]] = camera_obs
 
@@ -1237,8 +1237,8 @@ if train:
             actions_since_reset += 1
             attack_mask[envs+self_play:] = np.logical_not(defending[envs+self_play:]) & np.logical_not(next_state_def[envs+self_play:])
 
-            rewards[:envs] += np.where((puck_pos[:,0] < bounds[0]/2) & (np.abs(puck_vel[:,0]) < 0.15), -5.0, 0)
-            rewards[envs:][np.logical_not(defending[envs:])] += np.where((puck_pos[np.logical_not(defending[envs:])][:,0] > bounds[0]/2) & (np.abs(puck_vel[np.logical_not(defending[envs:])][:,0]) < 0.15), -5.0, 0)
+            rewards[left_envs_mask & np.logical_not(defending)] += np.where((puck_pos[:,0] < bounds[0]/2) & (np.abs(puck_vel[:,0]) < 0.15), -5.0, 0)[np.logical_not(defending[:envs])]
+            rewards[right_envs_mask & np.logical_not(defending)] += np.where((puck_pos[:,0] > bounds[0]/2) & (np.abs(puck_vel[:,0]) < 0.15), -5.0, 0)[np.logical_not(defending[envs:])]
 
             rewards[:envs][np.logical_not(defending[:envs]) & (puck_pos[:,0] > bounds[0]/2)] += (np.linalg.norm(puck_vel,axis=1)*8.5 * crossed[:envs])[np.logical_not(defending[:envs]) & (puck_pos[:,0] > bounds[0]/2)]
             rewards[envs:][np.logical_not(defending[envs:]) & (puck_pos[:,0] < bounds[0]/2)] += (np.linalg.norm(puck_vel,axis=1)*8.5 * crossed[envs:])[np.logical_not(defending[envs:]) & (puck_pos[:,0] < bounds[0]/2)]
@@ -1249,16 +1249,22 @@ if train:
             rewards[:envs] += np.where((puck_pos[:,0] < bounds[0]/2), -0.15, 0)
             rewards[envs:] += np.where((puck_pos[:,0] > bounds[0]/2) & attack_mask[envs:], -0.15, 0)
 
-            rewards[:envs][(past_puck_pos[:,0] < bounds[0]/2) & (puck_pos[:,0] > bounds[0]/2)] -= 25.0
-            rewards[envs:][(past_puck_pos[:,0] > bounds[0]/2) & (puck_pos[:,0] < bounds[0]/2)] -= 25.0
+            rewards[:envs] += np.where((past_puck_pos[:,0] < bounds[0]/2) & (puck_pos[:,0] > bounds[0]/2), -30.0, 0.0)
+            rewards[envs:] += np.where((past_puck_pos[:,0] > bounds[0]/2) & (puck_pos[:,0] < bounds[0]/2), -30.0, 0.0)
+
+            rewards[:envs] += np.where((past_puck_pos[:,0] < bounds[0]/2) & (puck_pos[:,0] > bounds[0]/2) & (np.linalg.norm(puck_vel,axis=1) < 5.0), -100.0, 0)
+            rewards[envs:] += np.where(attack_mask[envs:] & (past_puck_pos[:,0] > bounds[0]/2) & (puck_pos[:,0] < bounds[0]/2) & (np.linalg.norm(puck_vel,axis=1) < 5.0), -100.0, 0.0)
+
+            rewards[:envs] += np.where((past_puck_pos[:,0] < bounds[0]/2) & (puck_pos[:,0] > bounds[0]/2) & (np.linalg.norm(puck_vel,axis=1) < 2.0), -200.0, 0)
+            rewards[envs:] += np.where(attack_mask[envs:] & (past_puck_pos[:,0] > bounds[0]/2) & (puck_pos[:,0] < bounds[0]/2) & (np.linalg.norm(puck_vel,axis=1) < 2.0), -200.0, 0)
+        #rewards[:envs][defending[:envs] & (past_puck_pos[:envs,0] < (bounds[0]/2+2*puck_r)) & (puck_pos[:envs,0] > (bounds[0]/2)+2*puck_r)] -= 10.0
+            #rewards[:envs+self_play] += np.where(defending[:envs+self_play] & np.logical_not(next_state_def[:envs+self_play]), 5.0, 0.0)
 
             rewards[:envs][(past_puck_pos[:,0] < bounds[0]/2) & (puck_pos[:,0] > bounds[0]/2) & (np.linalg.norm(puck_vel,axis=1) < 7.0)] -= 100.0
             rewards[envs:][attack_mask[envs:] & (past_puck_pos[:,0] > bounds[0]/2) & (puck_pos[:,0] < bounds[0]/2) & (np.linalg.norm(puck_vel,axis=1) < 5.0)] -= 100.0
 
-            rewards[:envs][(past_puck_pos[:,0] < bounds[0]/2) & (puck_pos[:,0] > bounds[0]/2) & (np.linalg.norm(puck_vel,axis=1) < 4.0)] -= 200.0
-            rewards[envs:][attack_mask[envs:] & (past_puck_pos[:,0] > bounds[0]/2) & (puck_pos[:,0] < bounds[0]/2) & (np.linalg.norm(puck_vel,axis=1) < 2.0)] -= 200.0
             #rewards[:envs][defending[:envs] & (past_puck_pos[:envs,0] < (bounds[0]/2+2*puck_r)) & (puck_pos[:envs,0] > (bounds[0]/2)+2*puck_r)] -= 10.0
-            rewards[:envs+self_play][defending[:envs+self_play] & np.logical_not(next_state_def[:envs+self_play])] += 5.0
+            #rewards[:envs+self_play][defending[:envs+self_play] & np.logical_not(next_state_def[:envs+self_play])] += 5.0
             obs[:,38] = next_state_def[:]
             dones[:envs] = err_dones #| (defending[envs:] & np.logical_not(next_state_def[envs:]))
             dones[envs:] = dones[envs:] | err_dones
@@ -1700,16 +1706,16 @@ for update in range(500000):  # Training loop
         rewards[:envs] += np.where((puck_pos[:,0] < bounds[0]/2), -0.2, 0)
         rewards[envs:] += np.where((puck_pos[:,0] > bounds[0]/2) & attack_mask[envs:], -0.7, 0)
 
-        rewards[:envs][(past_puck_pos[:,0] < bounds[0]/2) & (puck_pos[:,0] > bounds[0]/2)] -= 25.0
-        rewards[envs:][(past_puck_pos[:,0] > bounds[0]/2) & (puck_pos[:,0] < bounds[0]/2)] -= 25.0
+        rewards[:envs] += np.where((past_puck_pos[:,0] < bounds[0]/2) & (puck_pos[:,0] > bounds[0]/2), -25.0, 0.0)
+        rewards[envs:] += np.where((past_puck_pos[:,0] > bounds[0]/2) & (puck_pos[:,0] < bounds[0]/2), -25.0, 0.0)
 
-        rewards[:envs][(past_puck_pos[:,0] < bounds[0]/2) & (puck_pos[:,0] > bounds[0]/2) & (np.linalg.norm(puck_vel,axis=1) < 7.0)] -= 100.0
-        rewards[envs:][attack_mask[envs:] & (past_puck_pos[:,0] > bounds[0]/2) & (puck_pos[:,0] < bounds[0]/2) & (np.linalg.norm(puck_vel,axis=1) < 5.0)] -= 100.0
+        rewards[:envs] += np.where((past_puck_pos[:,0] < bounds[0]/2) & (puck_pos[:,0] > bounds[0]/2) & (np.linalg.norm(puck_vel,axis=1) < 5.0), -100.0, 0)
+        rewards[envs:] += np.where(attack_mask[envs:] & (past_puck_pos[:,0] > bounds[0]/2) & (puck_pos[:,0] < bounds[0]/2) & (np.linalg.norm(puck_vel,axis=1) < 5.0), -100.0, 0.0)
 
-        rewards[:envs][(past_puck_pos[:,0] < bounds[0]/2) & (puck_pos[:,0] > bounds[0]/2) & (np.linalg.norm(puck_vel,axis=1) < 4.0)] -= 200.0
-        rewards[envs:][attack_mask[envs:] & (past_puck_pos[:,0] > bounds[0]/2) & (puck_pos[:,0] < bounds[0]/2) & (np.linalg.norm(puck_vel,axis=1) < 2.0)] -= 200.0
+        rewards[:envs] += np.where((past_puck_pos[:,0] < bounds[0]/2) & (puck_pos[:,0] > bounds[0]/2) & (np.linalg.norm(puck_vel,axis=1) < 2.0), -200.0, 0)
+        rewards[envs:] += np.where(attack_mask[envs:] & (past_puck_pos[:,0] > bounds[0]/2) & (puck_pos[:,0] < bounds[0]/2) & (np.linalg.norm(puck_vel,axis=1) < 2.0), -200.0, 0)
         #rewards[:envs][defending[:envs] & (past_puck_pos[:envs,0] < (bounds[0]/2+2*puck_r)) & (puck_pos[:envs,0] > (bounds[0]/2)+2*puck_r)] -= 10.0
-        rewards[:envs+self_play][defending[:envs+self_play] & np.logical_not(next_state_def[:envs+self_play])] += 5.0
+        rewards[:envs+self_play] += np.where(defending[:envs+self_play] & np.logical_not(next_state_def[:envs+self_play]), 5.0, 0.0)
         obs[:,38] = next_state_def[:]
         dones[:envs] = err_dones #| (defending[envs:] & np.logical_not(next_state_def[envs:]))
         dones[envs:] = dones[envs:] | err_dones

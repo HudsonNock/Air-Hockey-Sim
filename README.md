@@ -9,7 +9,7 @@ Our goal is to close the sim to real gap and deploy an AI model to successfully 
 
 System Overview:
 
-![System Diagram:](docs/sld.png)
+![System Diagram:](docs/air_hockey_flowchart.png)
 
 **Challenges**
 
@@ -21,9 +21,10 @@ Below is a video of the main agent (Left) playing against a smaller defence agen
 
 **Report and Details**
 
-The first half of the project (the first 8 months) and its full in depth report is linked below. This covers the simulation design, vision calibrations, and reinforcement learning setup. However, note that much of the content in this final report has since been improved, including the reinforcement learning state space and reward function, as well as puck collision dynamics modeling and firmware.
+The first half of the project (the first 8 months) and its full in depth report is linked below. This covers the simulation design, vision calibrations, and reinforcement learning setup. The second half of the project (last 8 months) is also included, covering the firmware, system dynamics, puck collision dynamics, reinforcement learning updates, and mechanical improvements. The project was spaced with a four month break between the two halves.
 
 First Half of Project: [Final Report](docs/2509-AIAirHockey-FinalReport.pdf)
+Second Half of the Project: [Final Report](docs/2550__AI_Air_Hockey_Final_Report.pdf)
 
 Below we give short outlines for each system, many of the technical details are outlined in the final report.
 
@@ -40,9 +41,9 @@ Below we give short outlines for each system, many of the technical details are 
 # ⚙️ Electro-Mechanical System
 [table of contents](#table-of-contents)
 
-This project is part of a multiyear effort. Our team **inherited the electromechanical subsystem** from the previous group (this was the only major component we retained) though we made several adjustments and improvements.
+This project is part of a multiyear effort. Our team **inherited the electromechanical subsystem** from the previous group (this was the only major component we retained), though we ended up redesiging the mechanical aspect.
 
-The system consists of a **Core-XY gantry** mounted on a custom wooden air hockey table (approximately **1 m × 2 m**) that covers half the table’s surface.  
+The original system consists of a **Core-XY gantry** mounted on a custom wooden air hockey table (approximately **1 m × 2 m**) that covers half the table’s surface.  
 The gantry is driven by **two motors with timing belts**, each connected to **motor drivers** and controlled via an **STM32 “Blue Pill” microcontroller**. Both motors include **encoders** connected over **SPI** for feedback.
 
 ![](docs/IMG_20251113_114419409.jpg)
@@ -76,28 +77,32 @@ We later developed and documented a **safety procedure** for capacitor handling 
 
 - **Supercapacitor charge circuit** — The original **pre-charge and discharge resistors** were oversized, resulting in **hour-long wait times**. We replaced them with **1 Ω power resistors**, reducing delays dramatically.
 
-- **Roller geometry** — The rollers guiding the timing belts have a **bend radius that is too small** for the belt specification.  
-  This causes premature belt wear, reduced tracking accuracy, and increased mechanical noise during motion.
+- **Roller geometry** — The rollers guiding the timing belts have a **bend radius that is too small** for the belt specification.
 
 - **Mallet Material** — The robot's mallet was originally printed out of PLA, however the impacts with the puck were too powerful and ended up breaking the mallet. We reprinted the mallet with PETG, high infill, and cuboid structure which has proven to be more impact resistant.
 
+- **Motor encoder mounts** — After hours of play, the motors would heat up enough that the 3D printed encoder mounts would warp resulting in inaccurate readings.
+
 ---
 
-### 🚀 Future Steps
+### 🚀 Upgrades
 
-To improve system reliability, accuracy, and maintainability, several mechanical and structural upgrades are planned:
+After integrating everything on the wooden table with a successful zero shot sim to real transfer, our main priority was **upgrading to a professional-grade air hockey table**. We were thinking about getting a pro player to play against it, however, the wooden table we were using can't truley be considered air hockey as it doesn't meet regulation standards and has very uncertain dynamics. This upgrade involved:
 
-- **Upgrade to a professional-grade air hockey table**. Currently the table we have can't truley be considered air hockey as it doesn't meet regulation standards and has very uncertain dynamics. If we were to get a pro player to compete against our AI, we would want a level, uniform table, with plastic sides and consistent dynamics.
+- **Designing a frame**. We went with a 80/20 frame design that allowed easy mounting of components to the frame as well as adjustable air hockey table dimentions. We calculated the maximum theoretical deformation under the applied load and designed it to be within 0.3 mm deformation. Apart from being flat, we ensured it would be possible to mount a 7 ft or 8 ft air hockey table surface (as both as professional standard). 
 
-- **Redesign the gantry beam and cable routing** to prevent bending caused by the belt and cable geometry.  
-  Possible solutions include repositioning the cable guides below the beam or reinforcing the beam with lightweight carbon-fiber or aluminum bracing.
+- **Redesign the gantry beam and cable routing** to prevent bending caused by the belt and cable geometry. This was achieved by placing the belt along the central axis of the beam and increasing the moment of intertia of the beam. Ian choose the new crossbeam and designed a new mallet carriage appropriately. Additionally, this ment redesigning other pulley blocks to fit accondingly.
 
 - **Re-engineer the roller assemblies** with a **larger bend radius** or replace them with **idler pulleys** that match the belt’s minimum recommended curvature.  
   This will reduce mechanical stress, vibration, and belt fatigue.
 
-- **Change mallet material**. Instead of 3D printing the mallet, we would like to attach a standard air hockey mallet to the mallet carriage, allowing for better collision dynamics.
+- **Change mallet material**. Instead of 3D printing the mallet, Ian attached a standard air hockey mallet to the mallet carriage, allowing for better collision dynamics.
 
-These improvements would provide a more robust and consistent physical platform for reinforcement learning experiments, simulation validation, and long-term autonomous gameplay testing.
+- **Change motor encoder mounts**. These were redesigned by Mauro to include thermally insulating standoffs allowing for no warping after play.
+
+### Future Challanges
+
+One main concern of the current mechanical design is the dynamic tension that is felt periodically when moving the gantry around indicating that the system is not LTI. We suspect this is due to the trapazoidal belt profile but have not had time to resolve the issue.
 
 # 🎯 Computer Vision
 [table of contents](#table-of-contents)
@@ -129,7 +134,7 @@ Instead we developed a **multi-view optimization procedure** that simultaneously
 - The **3D positions of ArUco markers**, and  
 - The **table surface height**, modeled as a second-order polynomial.  
 
-Once the optimization procedure was complete, we could then place the camera anywhere we desired and run a standard calibration technique to get the projection matrix. This approach enabled accurate mapping from image coordinates to real-world positions, achieving **~1 mm mean error** across the table. 
+Once the optimization procedure was complete, we could then place the camera anywhere we desired and run a standard calibration technique to get the projection matrix. This approach enabled accurate mapping from image coordinates to real-world positions, achieving **~1 mm mean error** across the table. Calibration details are provided in the 2509 final report with updates in 2550 final report.
 
 ### Puck Tracking and Occlusion Handling
 
@@ -139,12 +144,11 @@ To address this, we implemented a **contour-based tracking algorithm** that:
 2. Generates multiple center candidates from the contour shape  
 3. Selects the most consistent candidate based on geometric conformity  
 
-This maintains reliable tracking even when a majority of the puck is hidden by the structure. There are instances where the puck is fully occluded, in these cases we set the puck position to the previous puck location instead of trying to estimate the position, this is implemented into the simulation allowing the RL agent to do the prediction.
+This maintains reliable tracking even when a majority of the puck is hidden by the structure. There are instances where the puck is fully occluded, in these cases we set the puck position to the previous puck location instead of trying to estimate the position, this is also implemented into the simulation allowing the RL agent to do the prediction.
 
 ### Opponent Mallet Tracking
 
 We designed a lightweight **retroreflective mallet attachment** with a hollow center, producing a distinct contour from the puck.  
-Two attachment variants support different playing styles (standard and low-profile).  
 By detecting concentric contours, we can differentiate between puck and mallet and estimate both positions using the same calibrated camera system.
 
 ### 🏅 Key Achievements

@@ -41,7 +41,7 @@ Below we give short outlines for each system, many of the technical details are 
 # ⚙️ Electro-Mechanical System
 [table of contents](#table-of-contents)
 
-This project is part of a multiyear effort. Our team **inherited the electromechanical subsystem** from the previous group (this was the only major component we retained), though we ended up redesiging the mechanical aspect.
+This project is part of a multiyear effort. Our team **inherited the electromechanical subsystem** from the previous group, though we ended up redesiging most of the mechanical system.
 
 The original system consists of a **Core-XY gantry** mounted on a custom wooden air hockey table (approximately **1 m × 2 m**) that covers half the table’s surface.  
 The gantry is driven by **two motors with timing belts**, each connected to **motor drivers** and controlled via an **STM32 “Blue Pill” microcontroller**. Both motors include **encoders** connected over **SPI** for feedback.
@@ -87,11 +87,17 @@ We later developed and documented a **safety procedure** for capacitor handling 
 
 ### 🚀 Upgrades
 
-After integrating everything on the wooden table with a successful zero shot sim to real transfer, our main priority was **upgrading to a professional-grade air hockey table**. We were thinking about getting a pro player to play against it, however, the wooden table we were using can't truley be considered air hockey as it doesn't meet regulation standards and has very uncertain dynamics. This upgrade involved:
+After integrating everything on the wooden table with a successful zero shot sim to real transfer, our next goal was to get a pro player to compete against it. However, the wooden table doesn't meet regulation standards and has very uncertain dynamics, leading us to focus on **upgrading to a professional-grade air hockey table**, this involved:
 
-- **Designing a frame**. We went with a 80/20 frame design that allowed easy mounting of components to the frame as well as adjustable air hockey table dimentions. We calculated the maximum theoretical deformation under the applied load and designed it to be within 0.3 mm deformation. Apart from being flat, we ensured it would be possible to mount a 7 ft or 8 ft air hockey table surface (as both as professional standard). 
+- **Designing a frame**. We went with a 80/20 frame design that allowed easy mounting of components to the frame as well as adjustable air hockey table dimentions. We calculated the maximum theoretical deformation under the applied load and designed it to be within 0.3 mm deformation. Apart from being flat, we ensured it would be possible to mount a 7 ft or 8 ft air hockey table surface (as both are considered professional standard).
+
+![](docs/IMG_20260214_193535812.jpg)
+
+![](docs/IMG_20260521_164919802.jpg)
 
 - **Redesign the gantry beam and cable routing** to prevent bending caused by the belt and cable geometry. This was achieved by placing the belt along the central axis of the beam and increasing the moment of intertia of the beam. Ian choose the new crossbeam and designed a new mallet carriage appropriately. Additionally, this ment redesigning other pulley blocks to fit accondingly.
+
+![](docs/IMG_20260521_165110532.jpg)
 
 - **Re-engineer the roller assemblies** with a **larger bend radius** or replace them with **idler pulleys** that match the belt’s minimum recommended curvature.  
   This will reduce mechanical stress, vibration, and belt fatigue.

@@ -1,6 +1,9 @@
 from __future__ import print_function
 import numpy as np
 
+#Note: This code was copied from: https://github.com/scipy/scipy/issues/7242#issuecomment-290548427
+#and was not written by me
+
 def chandrupatla(f,x0,x1,verbose=False, 
                  eps_m = None, eps_a = None, 
                  maxiter=80, return_iter=False, args=(),):

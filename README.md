@@ -23,7 +23,7 @@ Below is a video of an agent playing against itself in simulation.
 
 The first half of the project (the first 8 months) and its full in depth report is linked below. This covers the simulation design, vision calibrations, and reinforcement learning setup. The second half of the project (last 8 months) is also included, covering the firmware, system dynamics, puck collision dynamics, reinforcement learning updates, and mechanical improvements. The project was spaced with a four month break between the two halves.
 
-First Half of Project: [Final Report](docs/2509 - AI Air Hockey - Final Report (PDF).pdf) <br>
+First Half of Project: [Final Report](docs/2509_AI_Air_Hockey_FinalReport.pdf) <br>
 Second Half of the Project: [Final Report](docs/2550___AI_Air_Hockey_Final_Report.pdf)
 
 Below we give short outlines for each system, many of the technical details are outlined in the final report. Note that this repo contains all of my personal code across the 4 branches, see https://github.com/AIAirHockey for mallet system ID code and code for puck motion differential equation fitting.

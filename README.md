@@ -2,7 +2,7 @@
 
 **Project Goal**
 
-Our goal is to close the sim to real gap and deploy an AI model to successfully play air hockey against a human. Below is a video of our current progress (click image to play video):
+Our goal is to close the sim to real gap and deploy an AI model to successfully play air hockey against a human. Below is a video of our end results with a quick overview (click image to play video):
 
 [![Watch the video](docs/gameplay_video_screenshot.png)](https://www.youtube.com/watch?v=75mm_B950PQ)
 
@@ -26,7 +26,7 @@ The first half of the project (the first 8 months) and its full in depth report 
 First Half of Project: [Final Report](docs/2509-AIAirHockey-FinalReport.pdf)
 Second Half of the Project: [Final Report](docs/2550__AI_Air_Hockey_Final_Report.pdf)
 
-Below we give short outlines for each system, many of the technical details are outlined in the final report.
+Below we give short outlines for each system, many of the technical details are outlined in the final report. Note that this repo contains all of my personal code across the 4 branches, see https://github.com/AIAirHockey for mallet system ID code and puck motion differential equation fitting code.
 
 ## Table of Contents
 
@@ -436,7 +436,7 @@ Historical opponent mallet positions at the same buffer indices (0, 1, 2, 5, 11)
 ### Agent State
 - **Mallet position**: Previous position (delayed—see Firmware and Timing section)
 - **Mallet velocity**: Calculated from delayed position data
-- **Previous action**: Ensures the MDP is fully defined, as `previous_action + past_position` determines current position
+- **Previous action**: Ensures the MDP is fully defined, as `previous_action + delayed_position` determines current position
 
 ### Domain Parameters
 Current system identification coefficients `(a₁, a₂, a₃, b₁, b₂, b₃)` being used (see system id section). These are included because they vary across training domains (see Domain Randomization section).
@@ -460,25 +460,25 @@ Initially, rewards were:
 
 **Problem**: Defense is easier than offense, making rewards extremely sparse and hindering learning.
 
-### Improved Approach (Dense Rewards via Rollouts)
+### Improved Approach
 
 When the puck crosses the halfway line toward the opponent:
 
-1. **Rollout Simulation**: Perform Monte Carlo estimation with 20 rollouts, assuming the opponent remains stationary
-2. **Reward Calculation**: 
+1. **Rollout Simulation**: Simulate the puck trajectory, assuming the opponent remains stationary
+2. **Reward Calculation**:
+   If the puck trajectory enters the opponents goal
    ```
    reward = E[success] × (20 + puck_velocity/2)
    ```
-   where `E[success]` is the expected probability of scoring from the rollouts assuming the opponent does not move.
-3. **Episode Termination**: Episode ends when puck crosses halfway, but simulation continues without reset
+   Otherwise, set the reward to 0.
+4. **Episode Termination**: If the puck trajectory doesn't enter the opponents goal end the episode, otherwise continue the episode. In either approach the simulation doesn't reset.
 
 **Benefits**:
-- Dense reward signal for offensive play
+- Dense reward signal for offensive play, along with frequent episode terminations making termination easier.
 - Velocity bonus encourages aggressive shots
 - Continuing simulation (without reset) maintains diverse state distribution
 - Prevents reward hacking where agent only cares to shoot frequently just to trigger halfway-line rewards
-
-*Note: Collision outcomes include stochasticity (see System Identification section), necessitating the Monte Carlo approach for accurate reward estimation.*
+- By not ending the episode when the trajectory of the puck enters the goal, we still encourage unpredictable shots which result in actual goals being scored giving a large reward boost.
 
 ---
 
@@ -492,21 +492,27 @@ The primary training method is **self-play**, where the agent plays against copi
 ### Diverse Opponent Pool
 To ensure robust performance, the agent trains against multiple opponent types:
 
-#### 1. Random Positional Agent
-- Selects a random area of the table (weighted towards the goal)
-- Moves randomly within that region
-- Provides unpredictable, non-strategic behavior
+#### 1. A defender agent
+- Another RL agent trained to defend against opponent shots and stabailze the puck
+- To make the defender possible to score on, we add a ~115 ms delay to the defenders vision data
+- When puck stabalized on its side, switches to the main policy network for offensive play
 
-#### 2. Defensive DQN Agent (~50k parameters)
-- **State space**: Same observation as the main agent
-- **Action space**: Three discrete actions (move left | move right | stay)
-- **Positioning**: Near goal line for defensive play
-- **Reward function**:
-  - Negative reward proportional to opponent's expected success probability (encourages blocking shots)
-  - Positive reward for reducing opponent's scoring chances
-- **Behavior switch**: When puck enters its side, switches to the main policy network for offensive play
+#### 2. Algorithmic Agent
+- Agent moves side to side always blocking straight shots encouraging bounce shots
+- When the puck enters it's side, it switches to the main agent
+- Mimics how humans often defend
+- Each agent has a given fixed forward distance adding diversity
+
+### 3. Previous Models
+- Previously trained networks, for example networks that focus on bounce shots or straight shots
 
 This opponent diversity prevents strategy overfitting and ensures the agent can handle various playing styles.
+
+## Off Policy Learning
+
+We use SAC, an off policy algorithm, to train the agent. Off policy means we can use data gathered from another policy to help train the current policy. Becuase of this, all data collected by previous models is then added to the data buffer for the main policy.
+
+We noticed that if this wasn't done the agent would specalize in one type of shot and forget other types of shots. By adding two previous agents to the previous models, one that specalized in straight shots and another that specalized in bounce shots, we ensure that the final policy never forgets about different types of shots.
 
 # Hyperparameters
 

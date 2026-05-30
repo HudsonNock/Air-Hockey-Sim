@@ -15,7 +15,7 @@ System Overview:
 
 To achieve this level of performance, we designed and statistically modeled the real performance of the table, including the vision accuracy, motor responses to voltage, timing throughout the firmware, and puck dynamics - while adjusting the electromechanical system so our models become more accurate. Using this model we wrote our own vectorized simulation to train a reinforcement learning (RL) agent which was then deployed on the physical air hockey table.
 
-Below is a video of the main agent (Left) playing against a smaller defence agent (Right).
+Below is a video of the agent playing against itself in simulation.
 
 ![](docs/195_vid.gif)
 
@@ -23,10 +23,10 @@ Below is a video of the main agent (Left) playing against a smaller defence agen
 
 The first half of the project (the first 8 months) and its full in depth report is linked below. This covers the simulation design, vision calibrations, and reinforcement learning setup. The second half of the project (last 8 months) is also included, covering the firmware, system dynamics, puck collision dynamics, reinforcement learning updates, and mechanical improvements. The project was spaced with a four month break between the two halves.
 
-First Half of Project: [Final Report](docs/2509-AIAirHockey-FinalReport.pdf)
+First Half of Project: [Final Report](docs/2509-AIAirHockey-FinalReport.pdf) <br>
 Second Half of the Project: [Final Report](docs/2550__AI_Air_Hockey_Final_Report.pdf)
 
-Below we give short outlines for each system, many of the technical details are outlined in the final report. Note that this repo contains all of my personal code across the 4 branches, see https://github.com/AIAirHockey for mallet system ID code and puck motion differential equation fitting code.
+Below we give short outlines for each system, many of the technical details are outlined in the final report. Note that this repo contains all of my personal code across the 4 branches, see https://github.com/AIAirHockey for mallet system ID code and code for puck motion differential equation fitting.
 
 ## Table of Contents
 
@@ -48,7 +48,7 @@ The gantry is driven by **two motors with timing belts**, each connected to **mo
 
 ![](docs/IMG_20251113_114419409.jpg)
 
-During aggressive motions, we observed **power-supply voltage sag**, leading to nonlinear behavior that made the system difficult to model accurately for simulation.  
+During aggressive motions, we observed **power-supply voltage sag**, leading to nonlinear behavior that made the system difficult to model and control.  
 To mitigate this, the previous team installed a **165 F supercapacitor** across the power rails to stabilize voltage under load.  
 We later developed and documented a **safety procedure** for capacitor handling — [see here](https://docs.google.com/presentation/d/1C2lxZXDaFv2uMI581Z3ULeYxlSjX5ojVwfU028PKIhc/edit?usp=sharing).
 
@@ -89,18 +89,17 @@ We later developed and documented a **safety procedure** for capacitor handling 
 
 After integrating everything on the wooden table with a successful zero shot sim to real transfer, our next goal was to get a pro player to compete against it. However, the wooden table doesn't meet regulation standards and has very uncertain dynamics, leading us to focus on **upgrading to a professional-grade air hockey table**, this involved:
 
-- **Designing a frame**. We went with a 80/20 frame design that allowed easy mounting of components to the frame as well as adjustable air hockey table dimentions. We calculated the maximum theoretical deformation under the applied load and designed it to be within 0.3 mm deformation. Apart from being flat, we ensured it would be possible to mount a 7 ft or 8 ft air hockey table surface (as both are considered professional standard).
+- **Designing a frame**. We went with a 80/20 frame design that allowed easy mounting of components as well as adjustable air hockey table dimensions (either 7 ft or 8 ft table surface). We calculated the maximum theoretical deformation under the applied static load and designed it to be within 0.2 mm ensuring a flat playing surface.
 
 ![](docs/IMG_20260214_193535812.jpg)
 
 ![](docs/IMG_20260521_164919802.jpg)
 
-- **Redesign the gantry beam and cable routing** to prevent bending caused by the belt and cable geometry. This was achieved by placing the belt along the central axis of the beam and increasing the moment of intertia of the beam. Ian choose the new crossbeam and designed a new mallet carriage appropriately. Additionally, this ment redesigning other pulley blocks to fit accondingly.
+- **Redesign the gantry beam and cable routing** to prevent bending of the crossbeam. To achieve this, we placing the belt along the central axis of the beam and increased the moment of inertia of the beam. Ian chose the new crossbeam and designed a new mallet carriage appropriately. Additionally, I redesign other pulley blocks to fit in the new layout.
 
 ![](docs/IMG_20260521_165110532.jpg)
 
-- **Re-engineer the roller assemblies** with a **larger bend radius** or replace them with **idler pulleys** that match the belt’s minimum recommended curvature.  
-  This will reduce mechanical stress, vibration, and belt fatigue.
+- **Re-engineer the roller assemblies** with a **larger bend radius** or replace them with **idler pulleys** that match the belt’s minimum recommended curvature.
 
 - **Change mallet material**. Instead of 3D printing the mallet, Ian attached a standard air hockey mallet to the mallet carriage, allowing for better collision dynamics.
 
@@ -307,7 +306,7 @@ The system runs on Ubuntu 22.04 with real-time kernel flags enabled, coordinatin
 
 To minimize serial bandwidth while maintaining reliability, we implemented a custom encoding scheme:
 
-- **Data Encoding**: Float values are scaled to `int16` range before transmission
+- **Data Encoding**: Float values are scaled to `int16` range before transmission using calculated bounds for each parameter.
 - **Packet Structure**: 
   - Start flag: `0xFF 0xFF 0xFF`
   - Data payload (scaled `int16` values)
@@ -466,19 +465,20 @@ When the puck crosses the halfway line toward the opponent:
 
 1. **Rollout Simulation**: Simulate the puck trajectory, assuming the opponent remains stationary
 2. **Reward Calculation**:
-   If the puck trajectory enters the opponents goal
+   Give an initial award of
    ```
-   reward = E[success] × (20 + puck_velocity/2)
+   reward = A * puck_velocity
    ```
-   Otherwise, set the reward to 0.
-4. **Episode Termination**: If the puck trajectory doesn't enter the opponents goal end the episode, otherwise continue the episode. In either approach the simulation doesn't reset.
+   Where A = 11.5 if the puck trajectory enters the opponents goal avoiding the opponent, 2.5 if it enters the opponents goal when ignoring the opponent, and 0 if it doesn't enter the opponent goal.
+   Additionally a large punishment is given if the puck velocity is less than 5 m/s.
+4. **Episode Termination**: If the puck trajectory doesn't enter the opponents goal (ignoring the opponent), then end the episode, otherwise continue the episode. In either approach the simulation doesn't reset.
 
 **Benefits**:
-- Dense reward signal for offensive play, along with frequent episode terminations making termination easier.
+- Dense reward signal for offensive play, along with frequent episode terminations making training easier.
 - Velocity bonus encourages aggressive shots
 - Continuing simulation (without reset) maintains diverse state distribution
 - Prevents reward hacking where agent only cares to shoot frequently just to trigger halfway-line rewards
-- By not ending the episode when the trajectory of the puck enters the goal, we still encourage unpredictable shots which result in actual goals being scored giving a large reward boost.
+- By continuing the episode if the puck trajectory enters the goal, we still encourage unpredictable shots as they result in actual goals giving a large reward boost.
 
 ---
 
@@ -492,13 +492,13 @@ The primary training method is **self-play**, where the agent plays against copi
 ### Diverse Opponent Pool
 To ensure robust performance, the agent trains against multiple opponent types:
 
-#### 1. A defender agent
+#### 1. A Defender Agent
 - Another RL agent trained to defend against opponent shots and stabailze the puck
-- To make the defender possible to score on, we add a ~115 ms delay to the defenders vision data
-- When puck stabalized on its side, switches to the main policy network for offensive play
+- To make the defender agent possible to score on, we add a ~102 ms extra delay to the defenders vision data
+- When puck stabalized on its side, we switch to the main policy for offensive play
 
 #### 2. Algorithmic Agent
-- Agent moves side to side always blocking straight shots encouraging bounce shots
+- Agent programmed to move side to side always blocking straight shots and encouraging bounce shots
 - When the puck enters it's side, it switches to the main agent
 - Mimics how humans often defend
 - Each agent has a given fixed forward distance adding diversity
@@ -510,55 +510,49 @@ This opponent diversity prevents strategy overfitting and ensures the agent can 
 
 ## Off Policy Learning
 
-We use SAC, an off policy algorithm, to train the agent. Off policy means we can use data gathered from another policy to help train the current policy. Becuase of this, all data collected by previous models is then added to the data buffer for the main policy.
+Since we are using Soft Actor-Critic (SAC), an off policy algorithm, to train the agent, we can use data gathered from another policy to help train the current policy. Becuase of this, all data collected by the previous models in the opponent pool are added to the data buffer for the main policy.
 
-We noticed that if this wasn't done the agent would specalize in one type of shot and forget other types of shots. By adding two previous agents to the previous models, one that specalized in straight shots and another that specalized in bounce shots, we ensure that the final policy never forgets about different types of shots.
+We noticed that if this wasn't done then the agent would specalize in one type of shot and forget all other shots. By adding two previous agents to the opponent pool, one that specalized in straight shots and another that specalized in bounce shots, we ensure that the final policy never forgets about different types of shots and specalized in both types.
 
 # Hyperparameters
 
 ## Network Architecture
 
 ### Policy Network
-A fully-connected deep neural network with **~1.8M parameters**:
+A fully-connected deep neural network with **~200k parameters**:
 
 ```python
-Layer 1:  Linear(obs_dim → 1024) + LayerNorm + ReLU
-Layer 2:  Linear(1024 → 1024) + LayerNorm + ReLU
-Layer 3:  Linear(1024 → 512) + LayerNorm + ReLU
-Layer 4:  Linear(512 → 256) + ReLU
-Layer 5:  Linear(256 → 128) + ReLU
-Output:   Linear(128 → action_dim × 2) + ScaledNormalParamExtractor
+Layer 1:  Linear(obs_dim → 512) + LayerNorm + LeakyReLU
+Layer 2:  Linear(512 → 256) + LayerNorm + LeakyReLU
+Layer 3:  Linear(256 → 128) + LeakyReLU
+Layer 4:  Linear(128 → 64) + LeakyReLU
+Output:  Linear(64 → action_dim × 2) + NormalParamExtractor
 ```
 
 **Design notes**:
 - LayerNorm used in early layers for stable training with high-dimensional observations
 - Output layer produces mean and standard deviation for a Gaussian policy
-- `ScaledNormalParamExtractor` applies domain-specific scaling to action parameters
 
-### Value Network
-Similar architecture to the policy network, used for advantage estimation with Generalized Advantage Estimation (GAE).
+### Q Network
+Similar architecture to the policy network. We used two Q networks and 2 target Q networks.
 
 ## Training Algorithm
 
-**Proximal Policy Optimization (PPO)** with the following hyperparameters:
+**Soft Actor Critic (SAC)** with the following hyperparameters:
 
 | Hyperparameter | Value | Notes |
 |----------------|-------|-------|
-| `lr_policy` | 5e-5 | Conservative to prevent divergence |
-| `lr_value` | 5e-5 | Matched to policy learning rate |
-| `gamma` | 0.997 | High discount factor for long-horizon planning |
-| `lambda` (GAE) | 0.7 | Balances bias-variance in advantage estimates |
-| `epsilon` (clip) | 0.05 | Tight clipping for stability |
-| `entropy_coeff` | 0.01 | Encourages exploration |
+| `lr_policy` | 5e-4 -> 1e-5 | Lower learning rate as it gets closer to convergence |
+| `lr_value` | 5e-4 -> 1e-5  | Matched to policy learning rate |
+| `gamma` | 0.98 | Low discount factor as air hockey is a fast game |
+| `tau` | 0.001 | slow updating of target Q nets |
 | `batch_size` | 1024 | Large batches enabled by fast simulation |
 
-### Design Considerations
+# Entropy
 
-**Conservative Learning Rates**: Initial experiments with higher learning rates (>1e-4) led to rapid policy divergence. The low learning rate of 5e-5 provides stable, gradual improvement.
+Although SAC does incentivise policies with higher entropy (hence the word soft in SAC here), we also tamper with the agents actions to sample surprising rollouts that could not be gotten with entropy alone.
 
-**On-Policy Training**: While PPO is sample-inefficient compared to off-policy methods, the simulation's 450× speedup provides ample data throughput, making sample efficiency less critical. This allows us to leverage PPO's simplicity and stability.
-
-**Large Batch Sizes**: The vectorized simulation generates data quickly, enabling large batch sizes that improve gradient estimates and training stability.
+Specifically, we modify the puck observation by applying a constant large shift to its observed position, sample the action, then remove the shift maintaining a valid transition pair. This produces useful rollouts where the agent learns multiple shot types are possible at many positions - further removing the chance of shot diversity collapse. This is only done to 30% of the agents with each agent getting a random offset.
 
 # Domain Randomization
 

@@ -15,7 +15,7 @@ System Overview:
 
 To achieve this level of performance, we designed and statistically modeled the real performance of the table, including the vision accuracy, motor responses to voltage, timing throughout the firmware, and puck dynamics - while adjusting the electromechanical system so our models become more accurate. Using this model we wrote our own vectorized simulation to train a reinforcement learning (RL) agent which was then deployed on the physical air hockey table.
 
-Below is a video of the agent playing against itself in simulation.
+Below is a video of an agent playing against itself in simulation.
 
 ![](docs/195_vid.gif)
 

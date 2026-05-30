@@ -406,7 +406,7 @@ Traditional simulations use fixed `dt` timesteps, creating a trade-off between p
 3. **Precomputed Paths**: Voltage profile restriction allows ODE solutions to be calculated once and reused
 4. **Vectorized Execution**: Multiple environments run in parallel using NumPy operations
 
-**Result**: Able to run the simulation at **450× real-time speedup** on an Intel i5 processor.
+**Result**: Able to run the simulation at **230× real-time speedup** on an Intel i5 processor.
 
 *Additional implementation details and derivations are provided in the final report.*
 
